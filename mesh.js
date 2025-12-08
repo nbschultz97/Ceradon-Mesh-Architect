@@ -63,8 +63,15 @@ const meshState = {
     designRadiusMeters: 300,
     targetReliability: 80
   },
+  mission: {
+    name: "Mesh Architect Plan",
+    project_code: "MESH-GHOST-347",
+    origin_tool: "mesh"
+  },
   nodes: [],
-  links: []
+  links: [],
+  kits: [],
+  constraints: []
 };
 
 function showMapError(message) {
@@ -89,7 +96,10 @@ function restoreFromLocalStorage() {
   try {
     const parsed = JSON.parse(stored);
     Object.assign(meshState.environment, parsed.environment || {});
+    if (parsed.mission) meshState.mission = { ...meshState.mission, ...parsed.mission };
     meshState.nodes = (parsed.nodes || []).map(ensureLatLng);
+    meshState.kits = parsed.kits || [];
+    meshState.constraints = parsed.constraints || [];
     syncEnvironmentInputs();
     recomputeMesh(false);
   } catch (err) {
@@ -795,36 +805,89 @@ function recomputeMesh(save = true) {
   if (save) saveToLocalStorage();
 }
 
-function exportMeshToText() {
-  const payload = {
-    meshVersion: "0.3",
-    environment: meshState.environment,
-    nodes: meshState.nodes,
-    links: meshState.links
+function buildMissionProjectPayload() {
+  const environment = {
+    terrain: meshState.environment.terrain,
+    ew_level: meshState.environment.ewLevel,
+    primary_band: meshState.environment.primaryBand,
+    design_radius_m: meshState.environment.designRadiusMeters,
+    target_reliability_pct: meshState.environment.targetReliability,
+    temperature_c: meshState.environment.temperatureC,
+    winds_mps: meshState.environment.windsMps,
+    altitude_band: meshState.environment.altitudeBand,
+    origin_tool: "mesh"
   };
+
+  const nodes = meshState.nodes.map(node => ({
+    id: node.id || generateId("node"),
+    label: node.label,
+    role: node.role,
+    band: node.band,
+    lat: node.lat,
+    lon: node.lng,
+    elevation_m: node.elevationMeters,
+    height_agl_m: node.heightAboveGroundMeters,
+    max_range_m: node.maxRangeMeters,
+    power_w: node.power_w ?? node.powerW,
+    battery_hours: node.batteryHours,
+    origin_tool: node.origin_tool || node.source || "mesh",
+    relay_candidate: node.relayCandidate,
+    carried_node_ids: node.carriedNodeIds || []
+  }));
+
+  const platforms = meshState.nodes
+    .filter(n => n.role === "uxs")
+    .map(p => ({
+      id: `${p.id}-platform`,
+      label: p.label,
+      type: "uxs",
+      band: p.band,
+      endurance_minutes: p.batteryHours ? Math.round(p.batteryHours * 60) : undefined,
+      max_altitude_m: p.heightAboveGroundMeters ? Math.round(p.heightAboveGroundMeters + (p.elevationMeters || 0)) : undefined,
+      lat: p.lat,
+      lon: p.lng,
+      elevation_m: p.elevationMeters,
+      origin_tool: p.origin_tool || "mesh",
+      carried_node_ids: p.carriedNodeIds || []
+    }));
+
+  const links = meshState.links.map(link => ({
+    id: link.id || `${link.fromId}-${link.toId}`,
+    from_id: link.fromId,
+    to_id: link.toId,
+    distance_m: Math.round(link.distanceOverrideMeters || link.distanceMeters || 0),
+    los: link.los,
+    quality: link.quality,
+    assumed_band: meshState.environment.primaryBand,
+    origin_tool: link.origin_tool || "mesh"
+  }));
+
+  return {
+    schema: "MissionProject",
+    version: "1.0",
+    origin_tool: "mesh",
+    mission: meshState.mission,
+    environment,
+    nodes,
+    platforms,
+    mesh_links: links,
+    kits: meshState.kits || [],
+    constraints: meshState.constraints || [],
+    notes: meshState.notes
+  };
+}
+
+function exportMeshToText() {
+  const payload = buildMissionProjectPayload();
   const area = document.getElementById("json-area");
   if (area) area.value = JSON.stringify(payload, null, 2);
-  setImportStatus("Mesh copied to text area for review.", "muted");
+  setImportStatus("MissionProject JSON copied to text area for review.", "muted");
 }
 
 function downloadJson() {
   const now = new Date();
-  const filename = `mesh-architect-export-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}.json`;
-  const blob = new Blob(
-    [
-      JSON.stringify(
-        {
-          meshVersion: "0.3",
-          environment: meshState.environment,
-          nodes: meshState.nodes,
-          links: meshState.links
-        },
-        null,
-        2
-      )
-    ],
-    { type: "application/json" }
-  );
+  const filename = `mission-project-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}.json`;
+  const blob = new Blob([JSON.stringify(buildMissionProjectPayload(), null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -835,9 +898,19 @@ function downloadJson() {
 
 function setImportStatus(message, tone = "muted") {
   const status = document.getElementById("import-status");
+  const banner = document.getElementById("import-error-banner");
   if (!status) return;
   status.textContent = message;
   status.style.color = tone === "error" ? "#ffb3b3" : "var(--muted)";
+  status.classList.toggle("error", tone === "error");
+  if (banner) {
+    if (tone === "error") {
+      banner.textContent = message;
+      banner.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
+  }
 }
 
 function normalizeRole(role) {
@@ -880,6 +953,7 @@ function importNodeArchitect(json) {
       elevationMeters: n.elevationMeters ?? n.altitudeMeters,
       heightAboveGroundMeters: n.heightAboveGroundMeters ?? n.mastHeightMeters,
       source: "nodeArchitect",
+      origin_tool: "node",
       notes: n.notes,
       relayCandidate
     };
@@ -903,6 +977,7 @@ function importUxSArchitect(json) {
       lng: n.lng ?? null,
       carriedNodeIds: n.carriedNodeIds || [],
       source: "uxsArchitect",
+      origin_tool: "uxs",
       notes: n.notes,
       elevationMeters: n.elevationMeters ?? n.altitudeMeters,
       heightAboveGroundMeters: n.heightAboveGroundMeters ?? n.mastHeightMeters ?? 50,
@@ -929,24 +1004,102 @@ function importMeshArchitect(json) {
     elevationMeters: node.elevationMeters ?? node.altitudeMeters,
     heightAboveGroundMeters: node.heightAboveGroundMeters ?? node.mastHeightMeters,
     source: node.source || "meshImport",
+    origin_tool: node.origin_tool || node.source || "mesh",
     relayCandidate: node.relayCandidate,
     isAirborne: node.isAirborne
   }));
   return { nodes, environment: json.environment };
 }
 
+function importMissionProject(json) {
+  if (json.schema !== "MissionProject") {
+    throw new Error("Expected MissionProject schema JSON.");
+  }
+  const nodes = (json.nodes || []).map(node => ({
+    id: node.id || generateId("node"),
+    label: node.label || node.name || node.id || "Node",
+    role: normalizeRole(node.role || "sensor"),
+    band: normalizeBand(node.band),
+    maxRangeMeters: node.max_range_m || node.maxRangeMeters || defaultRangeForRole(node.role || "sensor"),
+    lat: node.lat ?? node.latitude ?? null,
+    lng: node.lon ?? node.lng ?? node.longitude ?? null,
+    elevationMeters: node.elevation_m ?? node.elevationMeters,
+    heightAboveGroundMeters: node.height_agl_m ?? node.heightAboveGroundMeters,
+    batteryHours: node.battery_hours ?? node.batteryHours,
+    power_w: node.power_w ?? node.powerW,
+    origin_tool: node.origin_tool || node.source || json.origin_tool || "mesh",
+    relayCandidate: node.relay_candidate ?? node.relayCandidate,
+    carriedNodeIds: node.carried_node_ids || node.carriedNodeIds || []
+  }));
+
+  const platformNodes = (json.platforms || []).map((p, idx) => ({
+    id: p.id || generateId("uxs"),
+    label: p.label || p.name || `Platform ${idx + 1}`,
+    role: "uxs",
+    band: normalizeBand(p.band || json.environment?.primary_band),
+    maxRangeMeters: ROLE_DEFAULTS.uxs.baseRange,
+    lat: p.lat ?? p.latitude ?? null,
+    lng: p.lon ?? p.lng ?? p.longitude ?? null,
+    elevationMeters: p.elevation_m ?? p.elevationMeters,
+    heightAboveGroundMeters: p.max_altitude_m ?? p.heightAboveGroundMeters ?? p.height_agl_m,
+    origin_tool: p.origin_tool || "uxs",
+    carriedNodeIds: p.carried_node_ids || [],
+    isAirborne: true
+  }));
+
+  const links = (json.mesh_links || []).map(l => ({
+    id: l.id || `${l.from_id || ""}-${l.to_id || ""}`,
+    fromId: l.from_id,
+    toId: l.to_id,
+    distanceMeters: l.distance_m,
+    distanceOverrideMeters: l.distance_m,
+    los: l.los || "LOS",
+    quality: l.quality || "none",
+    assumedBand: l.assumed_band || json.environment?.primary_band,
+    origin_tool: l.origin_tool || json.origin_tool || "mesh"
+  }));
+
+  const environment = {
+    terrain: json.environment?.terrain || json.environment?.terrainType || meshState.environment.terrain,
+    ewLevel: json.environment?.ew_level || json.environment?.ewLevel || meshState.environment.ewLevel,
+    primaryBand: json.environment?.primary_band || json.environment?.primaryBand || meshState.environment.primaryBand,
+    designRadiusMeters: json.environment?.design_radius_m || meshState.environment.designRadiusMeters,
+    targetReliability: json.environment?.target_reliability_pct || meshState.environment.targetReliability,
+    temperatureC: json.environment?.temperature_c,
+    windsMps: json.environment?.winds_mps,
+    altitudeBand: json.environment?.altitude_band
+  };
+
+  return {
+    nodes: nodes.concat(platformNodes),
+    environment,
+    links,
+    mission: json.mission || meshState.mission,
+    kits: json.kits || [],
+    constraints: json.constraints || []
+  };
+}
+
 function applyImportResult(result, mode = "replace") {
   const nodes = (result.nodes || []).map(ensureLatLng);
   const environment = result.environment;
+  const links = result.links || [];
+  const mission = result.mission;
+  const kits = result.kits;
+  const constraints = result.constraints;
   if (mode === "append") {
     meshState.nodes = meshState.nodes.concat(nodes);
   } else {
     meshState.nodes = nodes;
   }
+  meshState.links = links;
   if (environment) {
     meshState.environment = { ...meshState.environment, ...environment };
     syncEnvironmentInputs();
   }
+  if (mission) meshState.mission = { ...meshState.mission, ...mission };
+  if (kits) meshState.kits = kits;
+  if (constraints) meshState.constraints = constraints;
   layoutNodes(meshState.nodes);
   selectedNodeId = null;
   recomputeMesh();
@@ -961,10 +1114,12 @@ function handleParsedImport(parsed) {
       applyImportResult(importNodeArchitect(parsed), mode);
     } else if (parsed.source === "UxSArchitect") {
       applyImportResult(importUxSArchitect(parsed), mode);
+    } else if (parsed.schema === "MissionProject") {
+      applyImportResult(importMissionProject(parsed), mode);
     } else if (parsed.meshVersion || parsed.environment || parsed.nodes) {
       applyImportResult(importMeshArchitect(parsed), mode);
     } else {
-      throw new Error("Unsupported JSON payload. Provide Node, UxS, or Mesh Architect JSON.");
+      throw new Error("Unsupported JSON payload. Provide MissionProject, Node, UxS, or Mesh Architect JSON.");
     }
   } catch (e) {
     console.warn("Invalid JSON", e);
@@ -1048,12 +1203,22 @@ function loadDemo() {
   const scenario = presetScenarios.find(s => s.id === selected);
   if (!scenario) {
     meshState.nodes = [];
+    meshState.constraints = [];
+    meshState.kits = [];
+    meshState.mission = { ...meshState.mission, name: "Mesh Architect Plan", project_code: "MESH-GHOST-347" };
     selectedNodeId = null;
     recomputeMesh();
     return;
   }
   meshState.environment = { ...meshState.environment, ...scenario.environment };
-  meshState.nodes = scenario.nodes.map(n => ({ ...n, source: "demo" }));
+  meshState.constraints = scenario.constraints || [];
+  meshState.kits = scenario.kits || [];
+  meshState.mission = {
+    name: scenario.label,
+    project_code: scenario.id?.toUpperCase?.() || "DEMO",
+    origin_tool: "demo"
+  };
+  meshState.nodes = scenario.nodes.map(n => ({ ...n, source: "demo", origin_tool: "mesh" }));
   syncEnvironmentInputs();
   if (map && scenario.environment.center) {
     map.setView([scenario.environment.center.lat, scenario.environment.center.lng], scenario.environment.center.zoom || mapDefaults.zoom);
@@ -1076,6 +1241,7 @@ function attachImportExport() {
   document.getElementById("download-btn")?.addEventListener("click", downloadJson);
   document.getElementById("import-btn")?.addEventListener("click", handleImport);
   document.getElementById("load-demo-btn")?.addEventListener("click", loadDemo);
+  document.getElementById("mission-file-input")?.addEventListener("change", e => handleFileImport(e, importMissionProject));
   document.getElementById("node-file-input")?.addEventListener("change", e => handleFileImport(e, importNodeArchitect));
   document.getElementById("uxs-file-input")?.addEventListener("change", e => handleFileImport(e, importUxSArchitect));
   document.getElementById("mesh-file-input")?.addEventListener("change", e => handleFileImport(e, importMeshArchitect));
@@ -1171,25 +1337,32 @@ ${linkPlacemarks}
 
 function exportMeshToCot() {
   const now = new Date();
-  const isoNow = now.toISOString();
-  const stale = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
-  const filename = `mesh-architect-atak-cot-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}.xml`;
-  const events = meshState.nodes
-    .map(
-      node => `<event version="2.0" type="a-f-G-U-C" uid="${node.id}" time="${isoNow}" start="${isoNow}" stale="${stale}">
-  <point lat="${node.lat}" lon="${node.lng}" hae="0" ce="9999999" le="9999999" />
-  <detail>
-    <contact callsign="${node.label}" />
-    <remarks>${node.role}, ${node.band} GHz, range ${node.maxRangeMeters} m</remarks>
-  </detail>
-</event>`
-    )
-    .join("\n");
+  const payload = {
+    type: "cot-snapshot",
+    generated: now.toISOString(),
+    project: meshState.mission?.name,
+    environment: {
+      terrain: meshState.environment.terrain,
+      ew_level: meshState.environment.ewLevel,
+      primary_band: meshState.environment.primaryBand
+    },
+    units: meshState.nodes.map(node => ({
+      uid: node.id,
+      callsign: node.label,
+      role: node.role,
+      band: node.band,
+      lat: node.lat,
+      lon: node.lng,
+      hae: (node.elevationMeters || 0) + (node.heightAboveGroundMeters || 0),
+      remarks: `${node.maxRangeMeters || ROLE_DEFAULTS[node.role]?.baseRange || 0} m range`
+    }))
+  };
 
-  const xml = `<cot>
-${events}
-</cot>`;
-  downloadTextFile(filename, xml, "text/xml");
+  const filename = `mesh-architect-atak-cot-${now
+    .toISOString()
+    .slice(0, 16)
+    .replace(/[:T]/g, "-")}.json`;
+  downloadTextFile(filename, JSON.stringify(payload, null, 2), "application/json");
 }
 
 function exportMeshToGeoJson() {
@@ -1207,7 +1380,9 @@ function exportMeshToGeoJson() {
         maxRangeMeters: node.maxRangeMeters,
         elevationMeters: node.elevationMeters,
         heightAboveGroundMeters: node.heightAboveGroundMeters,
-        source: node.source
+        source: node.source,
+        origin_tool: node.origin_tool || node.source || "mesh",
+        mission_project: { name: meshState.mission?.name, project_code: meshState.mission?.project_code }
       }
     });
   });
@@ -1230,7 +1405,8 @@ function exportMeshToGeoJson() {
         to: to.label,
         distanceMeters: Math.round(link.distanceMeters),
         los: link.los,
-        quality: link.quality
+        quality: link.quality,
+        assumed_band: meshState.environment.primaryBand
       }
     });
   });
