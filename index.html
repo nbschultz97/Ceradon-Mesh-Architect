@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ceradon Mesh Architect v0.1</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <h1>Ceradon Mesh Architect v0.1</h1>
+      <p class="subtitle">Multi-node comms planner for controllers, relays, sensors, and UxS.</p>
+    </div>
+    <div class="import-export">
+      <button id="export-btn">Export current mesh JSON</button>
+      <button id="load-demo-btn">Load demo scenario</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel left">
+      <h2>Environment &amp; Inputs</h2>
+
+      <div class="section">
+        <h3>Environment &amp; RF Difficulty</h3>
+        <label for="terrain-select">Terrain</label>
+        <select id="terrain-select">
+          <option>Indoor</option>
+          <option>Dense urban</option>
+          <option>Urban</option>
+          <option>Suburban</option>
+          <option>Rural</option>
+          <option>Open</option>
+        </select>
+
+        <label for="ew-select">EW / Interference Level</label>
+        <select id="ew-select">
+          <option>Low</option>
+          <option>Medium</option>
+          <option>High</option>
+          <option>Severe</option>
+        </select>
+
+        <label for="band-select">Primary Band</label>
+        <select id="band-select">
+          <option value="900">900 MHz</option>
+          <option value="1.2">1.2 GHz</option>
+          <option value="2.4">2.4 GHz</option>
+          <option value="5.8">5.8 GHz</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+
+      <div class="section">
+        <h3>Coverage Goal</h3>
+        <label for="design-radius">Design radius (m)</label>
+        <input type="number" id="design-radius" value="300" min="50" step="10" />
+
+        <label for="target-reliability">Desired minimum link reliability (%)</label>
+        <input type="number" id="target-reliability" value="80" min="10" max="100" step="5" />
+      </div>
+
+      <div class="section">
+        <h3>Node / UxS Catalog</h3>
+        <div class="button-grid">
+          <button data-node-role="controller" class="add-node">Add controller</button>
+          <button data-node-role="relay" class="add-node">Add ground relay</button>
+          <button data-node-role="uxs" class="add-node">Add aerial relay (UxS)</button>
+          <button data-node-role="sensor" class="add-node">Add sensor node</button>
+          <button data-node-role="client" class="add-node">Add client / handset</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel center">
+      <h2>Mesh Map / Node Graph</h2>
+      <div id="canvas-container">
+        <svg id="mesh-canvas" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+    </section>
+
+    <section class="panel right">
+      <h2>Outputs &amp; Hints</h2>
+
+      <div class="section" id="link-summary-section">
+        <h3>Link Summary</h3>
+        <table>
+          <thead>
+            <tr><th>From</th><th>To</th><th>Distance (m)</th><th>Predicted quality</th></tr>
+          </thead>
+          <tbody id="link-summary-body"></tbody>
+        </table>
+      </div>
+
+      <div class="section">
+        <h3>Relay / Gateway Recommendations</h3>
+        <p id="recommendations"></p>
+      </div>
+
+      <div class="section">
+        <h3>Blind-spot &amp; Coverage Hints</h3>
+        <ul id="coverage-hints"></ul>
+      </div>
+
+      <div class="section" id="node-detail-section">
+        <h3>Node Details</h3>
+        <div id="node-detail-content">Select a node to edit its details.</div>
+      </div>
+
+      <div class="section">
+        <h3>Import / Export</h3>
+        <textarea id="json-area" placeholder="Paste Node/UXS JSON here"></textarea>
+        <div class="button-grid">
+          <button id="import-btn">Import</button>
+          <button id="download-btn">Download JSON</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="sample-data.js"></script>
+  <script src="mesh.js"></script>
+</body>
+</html>
