@@ -1,10 +1,10 @@
-const STORAGE_KEY = "ceradon-mesh-state-v0.1";
+const STORAGE_KEY = "ceradon-mesh-state-v0.2";
 const ROLE_DEFAULTS = {
-  controller: { baseRange: 400, color: "var(--controller)" },
-  relay: { baseRange: 350, color: "var(--relay)" },
-  uxs: { baseRange: 600, color: "var(--uxs)" },
-  sensor: { baseRange: 250, color: "var(--sensor)" },
-  client: { baseRange: 150, color: "var(--client)" }
+  controller: { baseRange: 450, color: "var(--controller)" },
+  relay: { baseRange: 380, color: "var(--relay)" },
+  uxs: { baseRange: 650, color: "var(--uxs)" },
+  sensor: { baseRange: 260, color: "var(--sensor)" },
+  client: { baseRange: 180, color: "var(--client)" }
 };
 
 const BAND_FACTOR = {
@@ -31,6 +31,11 @@ const EW_MULTIPLIER = {
   Severe: 0.5
 };
 
+const mapDefaults = {
+  center: { lat: 40.76078, lng: -111.89105 },
+  zoom: 17
+};
+
 const meshState = {
   environment: {
     terrain: "Urban",
@@ -44,7 +49,11 @@ const meshState = {
 };
 
 let selectedNodeId = null;
-let dragInfo = null;
+let map;
+let linkLayers = [];
+let markerMap = new Map();
+let coverageCircle = null;
+let placementRole = null;
 
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(meshState));
@@ -56,7 +65,7 @@ function loadState() {
     try {
       const parsed = JSON.parse(stored);
       Object.assign(meshState.environment, parsed.environment || {});
-      meshState.nodes = parsed.nodes || [];
+      meshState.nodes = (parsed.nodes || []).map(ensureLatLng);
       meshState.links = parsed.links || [];
     } catch (e) {
       console.warn("Failed to parse stored mesh", e);
@@ -64,25 +73,39 @@ function loadState() {
   }
 }
 
+function restoreLastSession() {
+  loadState();
+  recompute(false);
+}
+
 function generateId(prefix) {
   return `${prefix}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function createNode(role) {
+function createNode(role, latlng) {
   const defaults = ROLE_DEFAULTS[role];
   const count = meshState.nodes.filter(n => n.role === role).length + 1;
   const label = `${role === "client" ? "Client" : role.charAt(0).toUpperCase() + role.slice(1)} ${count}`;
   const band = meshState.environment.primaryBand;
+  const base = latlng || offsetFromCenter();
   return {
     id: generateId(role),
     label,
     role,
     band,
     maxRangeMeters: defaults?.baseRange || 200,
-    x: Math.random() * 0.6 + 0.2,
-    y: Math.random() * 0.6 + 0.2,
+    lat: base.lat,
+    lng: base.lng,
+    altitudeMeters: role === "uxs" ? 100 : undefined,
     source: "manual"
   };
+}
+
+function offsetFromCenter() {
+  const center = map?.getCenter() || L.latLng(mapDefaults.center);
+  const latOffset = (Math.random() - 0.5) * 0.002;
+  const lngOffset = (Math.random() - 0.5) * 0.002;
+  return { lat: center.lat + latOffset, lng: center.lng + lngOffset };
 }
 
 function nodeColor(node) {
@@ -120,7 +143,7 @@ function attachEnvironmentHandlers() {
   });
   reliability.addEventListener("input", () => {
     meshState.environment.targetReliability = Number(reliability.value) || 80;
-    renderCoverageHints();
+    renderOutputs();
     saveState();
   });
 }
@@ -128,29 +151,45 @@ function attachEnvironmentHandlers() {
 function attachNodeButtons() {
   document.querySelectorAll(".add-node").forEach(btn => {
     btn.addEventListener("click", () => {
-      const role = btn.getAttribute("data-node-role");
-      const node = createNode(role);
-      meshState.nodes.push(node);
-      recompute();
-      focusNode(node.id);
+      placementRole = btn.getAttribute("data-node-role");
+      document.getElementById("placement-hint").textContent = `Click on the map to place a ${placementRole}.`;
     });
   });
 }
 
-function clearCanvas() {
-  const svg = document.getElementById("mesh-canvas");
-  while (svg.firstChild) svg.removeChild(svg.firstChild);
+function attachMapHandlers() {
+  map = L.map("mesh-map").setView([mapDefaults.center.lat, mapDefaults.center.lng], mapDefaults.zoom);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap contributors"
+  }).addTo(map);
+
+  map.on("click", evt => {
+    if (!placementRole) return;
+    const node = createNode(placementRole, evt.latlng);
+    placementRole = null;
+    document.getElementById("placement-hint").textContent = "";
+    meshState.nodes.push(node);
+    recompute();
+    focusNode(node.id);
+  });
 }
 
-function scaleToCanvas(value) {
-  return value * 1000;
+function markerIcon(role, selected) {
+  return L.divIcon({
+    className: `node-marker node-${role}${selected ? " selected" : ""}`,
+    iconSize: [18, 18]
+  });
+}
+
+function clearMarkers() {
+  markerMap.forEach(marker => marker.remove());
+  markerMap.clear();
 }
 
 function computeDistanceMeters(a, b) {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  const normalized = Math.sqrt(dx * dx + dy * dy);
-  return normalized * meshState.environment.designRadiusMeters * 2;
+  if (!map) return 0;
+  return Math.round(map.distance([a.lat, a.lng], [b.lat, b.lng]));
 }
 
 function effectiveRange(node) {
@@ -176,7 +215,7 @@ function recomputeLinks() {
       links.push({
         fromId: a.id,
         toId: b.id,
-        distanceMeters: Math.round(distance),
+        distanceMeters: distance,
         quality
       });
     }
@@ -184,61 +223,90 @@ function recomputeLinks() {
   meshState.links = links;
 }
 
-function renderLinks(svg) {
+function renderCoverageCircle() {
+  const primary = meshState.nodes.find(n => n.role === "controller");
+  if (!map) return;
+  if (coverageCircle) coverageCircle.remove();
+  if (!primary) return;
+  coverageCircle = L.circle([primary.lat, primary.lng], {
+    radius: meshState.environment.designRadiusMeters,
+    color: "#3a7bd5",
+    fillColor: "#3a7bd5",
+    fillOpacity: 0.12,
+    weight: 1.2
+  }).addTo(map);
+}
+
+function renderLinks() {
+  linkLayers.forEach(line => line.remove());
+  linkLayers = [];
   meshState.links.forEach(link => {
     const from = meshState.nodes.find(n => n.id === link.fromId);
     const to = meshState.nodes.find(n => n.id === link.toId);
     if (!from || !to) return;
-    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-    line.setAttribute("x1", scaleToCanvas(from.x));
-    line.setAttribute("y1", scaleToCanvas(from.y));
-    line.setAttribute("x2", scaleToCanvas(to.x));
-    line.setAttribute("y2", scaleToCanvas(to.y));
-    line.setAttribute("class", "link-line");
-    const stroke = link.quality === "good" ? "var(--good)" : link.quality === "marginal" ? "var(--marginal)" : link.quality === "fragile" ? "var(--fragile)" : "var(--none)";
-    line.setAttribute("stroke", stroke);
-    line.setAttribute("stroke-dasharray", link.quality === "none" ? "6 6" : "");
-    svg.appendChild(line);
+    if (link.quality === "none") return;
+    const color = link.quality === "good" ? "#3ac177" : link.quality === "marginal" ? "#f2c14e" : "#f07f3c";
+    const weight = link.quality === "fragile" ? 2 : 3;
+    const poly = L.polyline(
+      [
+        [from.lat, from.lng],
+        [to.lat, to.lng]
+      ],
+      {
+        color,
+        weight,
+        opacity: 0.9
+      }
+    ).addTo(map);
+    linkLayers.push(poly);
   });
 }
 
-function renderNodes(svg) {
+function renderNodes() {
+  clearMarkers();
   meshState.nodes.forEach(node => {
-    const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
-    group.setAttribute("data-node-id", node.id);
+    const marker = L.marker([node.lat, node.lng], {
+      draggable: true,
+      icon: markerIcon(node.role, node.id === selectedNodeId)
+    }).addTo(map);
 
-    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    circle.setAttribute("cx", scaleToCanvas(node.x));
-    circle.setAttribute("cy", scaleToCanvas(node.y));
-    circle.setAttribute("r", 16);
-    circle.setAttribute("fill", nodeColor(node));
-    circle.setAttribute("class", "node-circle");
-    circle.addEventListener("mousedown", startDrag);
-    circle.addEventListener("click", () => focusNode(node.id));
+    marker.on("click", () => focusNode(node.id));
+    marker.on("dragend", e => {
+      const pos = e.target.getLatLng();
+      node.lat = pos.lat;
+      node.lng = pos.lng;
+      recompute();
+    });
 
-    const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    label.setAttribute("x", scaleToCanvas(node.x));
-    label.setAttribute("y", scaleToCanvas(node.y) - 22);
-    label.setAttribute("class", "node-label");
-    label.textContent = `${node.label} (${node.band} GHz)`;
-
-    group.appendChild(circle);
-    group.appendChild(label);
-    svg.appendChild(group);
+    marker.bindPopup(`<strong>${node.label}</strong><br/>${node.role} • ${node.band} GHz`);
+    markerMap.set(node.id, marker);
   });
 }
 
 function renderLinkSummary() {
   const tbody = document.getElementById("link-summary-body");
   tbody.innerHTML = "";
-  meshState.links.forEach(link => {
+  const qualityRank = { none: 3, fragile: 2, marginal: 1, good: 0 };
+  const sorted = [...meshState.links].sort((a, b) => {
+    const qa = qualityRank[a.quality];
+    const qb = qualityRank[b.quality];
+    if (qa === qb) return b.distanceMeters - a.distanceMeters;
+    return qb - qa;
+  });
+
+  sorted.forEach(link => {
     const tr = document.createElement("tr");
     const from = meshState.nodes.find(n => n.id === link.fromId);
     const to = meshState.nodes.find(n => n.id === link.toId);
-    const cells = [from?.label || link.fromId, to?.label || link.toId, link.distanceMeters, link.quality];
-    cells.forEach(value => {
+    const cells = [from?.label || link.fromId, to?.label || link.toId, Math.round(link.distanceMeters), link.quality];
+    cells.forEach((value, idx) => {
       const td = document.createElement("td");
-      td.textContent = value;
+      if (idx === 3) {
+        td.textContent = value;
+        td.className = `quality-${value}`;
+      } else {
+        td.textContent = value;
+      }
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
@@ -249,16 +317,18 @@ function renderRecommendations() {
   const p = document.getElementById("recommendations");
   const relayCount = meshState.nodes.filter(n => n.role === "relay" || n.role === "uxs").length;
   const controllers = meshState.nodes.filter(n => n.role === "controller").length;
-  const fragile = meshState.links.filter(l => l.quality === "fragile").length;
-  const none = meshState.links.filter(l => l.quality === "none").length;
-
+  const marginalOrBetter = meshState.links.filter(l => l.quality === "good" || l.quality === "marginal");
+  const isolated = meshState.links.filter(l => l.quality !== "good" && l.quality !== "marginal").length;
   let text = `Relays: ${relayCount}. Controllers/Gateways: ${controllers}. `;
-  if (none > 0) {
-    text += "Disconnected nodes detected; add relays to span the gap.";
-  } else if (fragile > meshState.links.length * 0.3) {
-    text += "Outer edges show fragile links; consider another relay or higher band gain.";
+  if (meshState.environment.ewLevel === "High" || meshState.environment.ewLevel === "Severe") {
+    text += "High EW: prioritize redundancy and frequency diversity. ";
+  }
+  if (!marginalOrBetter.length && meshState.nodes.length > 1) {
+    text += "Isolated nodes detected. Add a relay to stitch the mesh.";
+  } else if (isolated > meshState.links.length * 0.3) {
+    text += "Large coverage gaps; add perimeter relays or tighten spacing.";
   } else {
-    text += "Coverage appears adequate for the central area; monitor perimeter spacing.";
+    text += "Core mesh is stable; evaluate edge clients for resiliency.";
   }
   p.textContent = text;
 }
@@ -266,25 +336,31 @@ function renderRecommendations() {
 function renderCoverageHints() {
   const list = document.getElementById("coverage-hints");
   list.innerHTML = "";
-  const target = meshState.environment.targetReliability;
-  const hintItems = [];
+  const target = meshState.environment.targetReliability / 100;
+  const hints = [];
 
   meshState.nodes.forEach(node => {
     const links = meshState.links.filter(l => l.fromId === node.id || l.toId === node.id);
-    const goodLinks = links.filter(l => l.quality === "good");
-    if (links.length === 0 || goodLinks.length === 0) {
-      hintItems.push(`${node.label} has no strong links; reposition or add relays.`);
+    const good = links.filter(l => l.quality === "good" || l.quality === "marginal");
+    if (links.length === 0 || good.length === 0) {
+      hints.push(`${node.label} is isolated; add a relay within ~${Math.round(node.maxRangeMeters * 0.5)} m.`);
     }
   });
 
-  const marginalShare = meshState.links.filter(l => l.quality === "marginal").length / (meshState.links.length || 1);
-  if (marginalShare > (100 - target) / 100) {
-    hintItems.push("Average link quality is below the desired reliability; tighten spacing or adjust terrain assumptions.");
+  const avgRatio = meshState.links.reduce((sum, l) => {
+    const a = meshState.nodes.find(n => n.id === l.fromId);
+    const b = meshState.nodes.find(n => n.id === l.toId);
+    const range = Math.min(effectiveRange(a || {}), effectiveRange(b || {})) || 1;
+    return sum + l.distanceMeters / range;
+  }, 0) / (meshState.links.length || 1);
+
+  if (avgRatio > 0.8) {
+    hints.push("Most links are near range limits; tighten spacing or add relays.");
   }
 
-  if (hintItems.length === 0) hintItems.push("No major blind spots detected at current layout.");
+  if (!hints.length) hints.push("No major blind spots detected at current layout.");
 
-  hintItems.forEach(text => {
+  hints.forEach(text => {
     const li = document.createElement("li");
     li.textContent = text;
     list.appendChild(li);
@@ -327,20 +403,39 @@ function renderNodeDetails() {
   rangeInput.min = 50;
   rangeInput.step = 10;
 
-  [labelInput, roleSelect, bandSelect, rangeInput].forEach(el => {
+  const altitudeInput = document.createElement("input");
+  altitudeInput.type = "number";
+  altitudeInput.value = node.altitudeMeters ?? "";
+  altitudeInput.placeholder = "Optional (meters)";
+  altitudeInput.step = 10;
+
+  [labelInput, roleSelect, bandSelect, rangeInput, altitudeInput].forEach(el => {
     el.addEventListener("input", () => {
       node.label = labelInput.value;
       node.role = roleSelect.value;
       node.band = bandSelect.value;
       node.maxRangeMeters = Number(rangeInput.value) || node.maxRangeMeters;
+      node.altitudeMeters = altitudeInput.value ? Number(altitudeInput.value) : undefined;
+      const marker = markerMap.get(node.id);
+      if (marker) marker.setIcon(markerIcon(node.role, node.id === selectedNodeId));
       recompute();
     });
+  });
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.textContent = "Delete selected node";
+  deleteBtn.addEventListener("click", () => {
+    meshState.nodes = meshState.nodes.filter(n => n.id !== node.id);
+    selectedNodeId = null;
+    recompute();
   });
 
   container.appendChild(createLabeledField("Label", labelInput));
   container.appendChild(createLabeledField("Role", roleSelect));
   container.appendChild(createLabeledField("Band", bandSelect));
   container.appendChild(createLabeledField("Max range (m)", rangeInput));
+  container.appendChild(createLabeledField("Altitude (m, optional)", altitudeInput));
+  container.appendChild(deleteBtn);
 }
 
 function createLabeledField(label, element) {
@@ -354,35 +449,11 @@ function createLabeledField(label, element) {
 
 function focusNode(nodeId) {
   selectedNodeId = nodeId;
+  markerMap.forEach((marker, id) => {
+    const node = meshState.nodes.find(n => n.id === id);
+    marker.setIcon(markerIcon(node?.role || "client", id === selectedNodeId));
+  });
   renderNodeDetails();
-}
-
-function startDrag(evt) {
-  const svg = document.getElementById("mesh-canvas");
-  const rect = svg.getBoundingClientRect();
-  const nodeId = evt.target.parentNode.getAttribute("data-node-id");
-  dragInfo = { nodeId, offsetX: rect.left, offsetY: rect.top, width: rect.width, height: rect.height };
-  document.addEventListener("mousemove", onDrag);
-  document.addEventListener("mouseup", endDrag);
-}
-
-function onDrag(evt) {
-  if (!dragInfo) return;
-  const { nodeId, offsetX, offsetY, width, height } = dragInfo;
-  const node = meshState.nodes.find(n => n.id === nodeId);
-  if (!node) return;
-  const x = (evt.clientX - offsetX) / width;
-  const y = (evt.clientY - offsetY) / height;
-  node.x = Math.max(0.05, Math.min(0.95, x));
-  node.y = Math.max(0.05, Math.min(0.95, y));
-  recompute(false);
-}
-
-function endDrag() {
-  dragInfo = null;
-  document.removeEventListener("mousemove", onDrag);
-  document.removeEventListener("mouseup", endDrag);
-  saveState();
 }
 
 function recompute(save = true) {
@@ -391,20 +462,45 @@ function recompute(save = true) {
   if (save) saveState();
 }
 
-function render() {
-  clearCanvas();
-  const svg = document.getElementById("mesh-canvas");
-  renderLinks(svg);
-  renderNodes(svg);
+function renderMeshSummary() {
+  const summaryText = document.getElementById("mesh-health");
+  const counts = document.getElementById("mesh-counts");
+  const totals = meshState.nodes.reduce((acc, node) => {
+    acc[node.role] = (acc[node.role] || 0) + 1;
+    return acc;
+  }, {});
+  const qualityCounts = meshState.links.reduce(
+    (acc, link) => {
+      acc[link.quality] = (acc[link.quality] || 0) + 1;
+      return acc;
+    },
+    { good: 0, marginal: 0, fragile: 0, none: 0 }
+  );
+  const totalLinks = meshState.links.length || 1;
+  const goodShare = (qualityCounts.good + qualityCounts.marginal) / totalLinks;
+  const health = goodShare >= 0.7 ? "Robust" : goodShare >= 0.4 ? "Marginal" : "Fragile";
+  summaryText.textContent = meshState.nodes.length ? `Network is ${health} under current assumptions.` : "Network is waiting for nodes.";
+  counts.textContent = `Ctrl ${totals.controller || 0} • Relays ${totals.relay || 0} • UxS ${totals.uxs || 0} • Sensors ${totals.sensor || 0} • Clients ${totals.client || 0} | Links G:${qualityCounts.good} M:${qualityCounts.marginal} F:${qualityCounts.fragile}`;
+}
+
+function renderOutputs() {
   renderLinkSummary();
   renderRecommendations();
   renderCoverageHints();
   renderNodeDetails();
+  renderMeshSummary();
+}
+
+function render() {
+  renderLinks();
+  renderNodes();
+  renderCoverageCircle();
+  renderOutputs();
 }
 
 function exportMesh() {
   const payload = {
-    meshVersion: "0.1",
+    meshVersion: "0.2",
     environment: meshState.environment,
     nodes: meshState.nodes,
     links: meshState.links
@@ -414,8 +510,10 @@ function exportMesh() {
 }
 
 function downloadMesh() {
+  const now = new Date();
+  const filename = `mesh-architect-export-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}.json`;
   const blob = new Blob([JSON.stringify({
-    meshVersion: "0.1",
+    meshVersion: "0.2",
     environment: meshState.environment,
     nodes: meshState.nodes,
     links: meshState.links
@@ -423,86 +521,139 @@ function downloadMesh() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "ceradon-mesh.json";
+  a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
 }
 
-function layoutNodes(nodes) {
-  const count = nodes.length;
-  const radius = 0.35;
-  nodes.forEach((node, idx) => {
-    const angle = (idx / count) * 2 * Math.PI;
-    node.x = 0.5 + radius * Math.cos(angle);
-    node.y = 0.5 + radius * Math.sin(angle);
-  });
-}
-
-function importJson() {
-  const text = document.getElementById("json-area").value;
+function importJson(text) {
   if (!text.trim()) return;
   try {
     const parsed = JSON.parse(text);
     if (parsed.meshVersion) {
       meshState.environment = { ...meshState.environment, ...(parsed.environment || {}) };
-      meshState.nodes = (parsed.nodes || []).map(n => ({ ...n, x: n.x ?? Math.random(), y: n.y ?? Math.random() }));
+      meshState.nodes = (parsed.nodes || []).map(ensureLatLng);
     } else if (parsed.source === "NodeArchitect") {
-      meshState.nodes = (parsed.nodes || []).map(n => ({
+      meshState.nodes = (parsed.nodes || []).map(n => ensureLatLng({
         id: n.id || generateId("node"),
         label: n.label || n.id || "Node",
         role: n.role || "sensor",
         band: String(n.band || meshState.environment.primaryBand),
         maxRangeMeters: n.approxRangeMeters || ROLE_DEFAULTS[n.role]?.baseRange || 200,
-        x: Math.random() * 0.8 + 0.1,
-        y: Math.random() * 0.8 + 0.1,
+        x: n.x,
+        y: n.y,
         source: "nodeArchitect"
       }));
     } else if (parsed.source === "UxSArchitect") {
-      meshState.nodes = (parsed.uxsPlatforms || []).map(n => ({
+      meshState.nodes = (parsed.uxsPlatforms || []).map(n => ensureLatLng({
         id: n.id || generateId("uxs"),
         label: n.label || n.id || "UxS",
         role: n.role || "uxs",
         band: String(n.band || meshState.environment.primaryBand),
         maxRangeMeters: n.maxRangeMeters || ROLE_DEFAULTS[n.role]?.baseRange || 400,
-        x: Math.random() * 0.8 + 0.1,
-        y: Math.random() * 0.8 + 0.1,
+        x: n.x,
+        y: n.y,
         source: "uxsArchitect",
         attachedPlatformId: n.attachedPlatformId
       }));
     }
-    if (meshState.nodes.length) layoutNodes(meshState.nodes);
     recompute();
   } catch (e) {
     alert("Invalid JSON provided.");
   }
 }
 
+function handleImport() {
+  const text = document.getElementById("json-area").value;
+  importJson(text);
+}
+
+function handleFileImport(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    importJson(e.target.result);
+  };
+  reader.onerror = () => alert("Failed to read file");
+  reader.readAsText(file);
+}
+
+function layoutNodes(nodes) {
+  const count = nodes.length || 1;
+  const center = map?.getCenter() || mapDefaults.center;
+  const radiusLat = 0.0015;
+  nodes.forEach((node, idx) => {
+    if (node.lat && node.lng) return;
+    const angle = (idx / count) * 2 * Math.PI;
+    node.lat = center.lat + radiusLat * Math.cos(angle);
+    node.lng = center.lng + radiusLat * Math.sin(angle);
+  });
+}
+
+function ensureLatLng(node) {
+  if (node.lat != null && node.lng != null) return node;
+  const center = map?.getCenter() || mapDefaults.center;
+  const span = 0.002;
+  const mappedLat = center.lat + ((node.y ?? Math.random()) - 0.5) * span;
+  const mappedLng = center.lng + ((node.x ?? Math.random()) - 0.5) * span;
+  return { ...node, lat: mappedLat, lng: mappedLng };
+}
+
 function loadDemo() {
-  if (!window.demoScenario) return;
-  meshState.environment = { ...meshState.environment, ...demoScenario.environment };
-  meshState.nodes = demoScenario.nodes.map(n => ({
-    ...n,
-    x: Math.random() * 0.8 + 0.1,
-    y: Math.random() * 0.8 + 0.1,
-    source: "demo"
-  }));
+  const presetSelect = document.getElementById("preset-select");
+  const selected = presetSelect.value;
+  const scenario = presetScenarios.find(s => s.id === selected);
+  if (!scenario) {
+    meshState.nodes = [];
+    selectedNodeId = null;
+    recompute();
+    return;
+  }
+  meshState.environment = { ...meshState.environment, ...scenario.environment };
+  const { center } = scenario.environment;
+  if (center) {
+    map.setView([center.lat, center.lng], center.zoom || mapDefaults.zoom);
+  }
+  meshState.nodes = scenario.nodes.map(n => ({ ...n, source: "demo" }));
   layoutNodes(meshState.nodes);
+  selectedNodeId = null;
   recompute();
 }
 
 function attachImportExport() {
   document.getElementById("export-btn").addEventListener("click", exportMesh);
   document.getElementById("download-btn").addEventListener("click", downloadMesh);
-  document.getElementById("import-btn").addEventListener("click", importJson);
+  document.getElementById("import-btn").addEventListener("click", handleImport);
   document.getElementById("load-demo-btn").addEventListener("click", loadDemo);
+  document.getElementById("file-input").addEventListener("change", handleFileImport);
+  document.getElementById("reset-btn").addEventListener("click", () => {
+    meshState.nodes = [];
+    selectedNodeId = null;
+    recompute();
+  });
+  document.getElementById("restore-btn").addEventListener("click", restoreLastSession);
+}
+
+function populatePresetSelect() {
+  const select = document.getElementById("preset-select");
+  presetScenarios.forEach(scenario => {
+    const opt = document.createElement("option");
+    opt.value = scenario.id;
+    opt.textContent = scenario.label;
+    select.appendChild(opt);
+  });
 }
 
 function init() {
+  attachMapHandlers();
   loadState();
   attachEnvironmentHandlers();
   attachNodeButtons();
+  populatePresetSelect();
   attachImportExport();
   if (!meshState.nodes.length) saveState();
+  layoutNodes(meshState.nodes);
   recompute(false);
 }
 
