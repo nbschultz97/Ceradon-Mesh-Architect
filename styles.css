@@ -26,6 +26,68 @@ body {
   color: var(--text);
 }
 
+.demo-banner {
+  position: relative;
+  margin: 1.5rem;
+  background: #f5f5f7;
+  color: #0f141b;
+  border: 1px solid #d8d8db;
+  border-radius: 10px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.06);
+  max-height: 50vh;
+  overflow: auto;
+}
+
+.demo-banner.hidden {
+  display: none;
+}
+
+#demo-banner-close {
+  position: absolute;
+  right: 0.75rem;
+  top: 0.65rem;
+  background: transparent;
+  color: #0f141b;
+  border: none;
+  width: auto;
+  padding: 0.35rem 0.5rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.demo-flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: #0b1016;
+  border-bottom: 1px solid #1f2a36;
+}
+
+.demo-flow span {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.stack-callout {
+  margin: 0.75rem 1rem 0;
+  background: #0b1016;
+  border: 1px solid #1f2a36;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+}
+
+.stack-callout ul {
+  margin: 0.5rem 0 0 1rem;
+  padding: 0;
+}
+
+.stack-callout li {
+  margin-bottom: 0.35rem;
+  line-height: 1.4;
+}
+
 h1, h2, h3 {
   margin: 0 0 0.5rem 0;
 }
@@ -72,6 +134,24 @@ h1, h2, h3 {
 
 .section {
   margin-bottom: 1rem;
+}
+
+.import-mode {
+  display: flex;
+  gap: 1rem;
+  margin: 0.5rem 0;
+  flex-wrap: wrap;
+}
+
+.import-files {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0.5rem;
+}
+
+.import-mode input[type="radio"] {
+  width: auto;
+  margin-right: 0.35rem;
 }
 
 label {
@@ -270,5 +350,19 @@ button:active {
   }
   .panel {
     min-height: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .demo-banner {
+    margin: 0.75rem;
+    max-height: 45vh;
+  }
+  #mesh-map {
+    min-height: 420px;
+  }
+  .demo-flow {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
