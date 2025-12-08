@@ -6,7 +6,7 @@
   --muted: #9aa6b8;
   --good: #3ac177;
   --marginal: #f2c14e;
-  --fragile: #f07f3c;
+  --unlikely: #f07f3c;
   --none: #7a7f87;
   --sensor: #55c57a;
   --controller: #4c82ff;
@@ -303,7 +303,7 @@ button:active {
 
 .quality-good { color: var(--good); }
 .quality-marginal { color: var(--marginal); }
-.quality-fragile { color: var(--fragile); }
+.quality-unlikely { color: var(--unlikely); }
 .quality-none { color: var(--none); }
 
 .inline-actions {

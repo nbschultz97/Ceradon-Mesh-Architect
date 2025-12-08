@@ -22,11 +22,12 @@ Key context:
 2. Define coverage goals: design radius and desired link reliability.
 3. Choose a preset Area of Operations (AO) in **Quick Demo** and click **Load demo scenario**, or pick **None** for a blank map.
 4. Add nodes using the catalog buttons, then click the map to place each node. Drag markers to reposition; popups show labels/roles.
-5. Review link quality lines on-map plus the **Link Summary** (sorted worst first), recommendations, coverage hints, and mesh snapshot (node/role counts and link health).
+5. Review link quality lines on-map plus the **Link Summary** (sorted worst first), recommendations, coverage hints, and mesh snapshot (node/role counts and link health). Each link row lets you override assumed distance and LOS/NLOS so the quality calculation stays honest.
 6. Export the mesh JSON for sharing, or import Node Architect / UxS Architect / saved Mesh Architect JSON. Import defaults to replace; you can switch to append.
 
 ## Import and export
 - **Export current mesh JSON** populates a JSON block containing the environment, nodes (with `lat`/`lng`), and computed links. You can also download a timestamped file (`mesh-architect-export-YYYYMMDD-HHMM.json`).
+- **Export for TAK / ATAK** produces KML, GeoJSON, or Cursor-on-Target (CoT) snapshots with node/link metadata (role, band, range, LOS assumption, and link quality) ready for ingestion by TAK Server or other map viewers.
 - **Import** options (paste JSON or load a `.json` file):
   - **Node Architect JSON**
     ```json
@@ -47,6 +48,8 @@ Key context:
     - `role` maps to Mesh Architect roles: `controller` | `relay` | `sensor` | `client` | `uxs`.
     - `band` is one of `900` | `1.2` | `2.4` | `5.8` | `other`.
     - `maxRangeMeters` overrides the role default. `lat`/`lng` are optional; missing values are auto-laid out around the current map center.
+    - Optional `elevationMeters` + `heightAboveGroundMeters` store terrain and mast height for later LOS checks.
+    - Optional `weight` hints relay candidates; higher-weight nodes are treated as potential relays.
   - **UxS Architect JSON**
     ```json
     {
@@ -66,6 +69,7 @@ Key context:
     ```
     - Each `uxsPlatform` becomes a Mesh Architect node with role `uxs`.
     - `carriedNodeIds` are stored for future linking; lat/lng are optional and will be placed near the map center if absent.
+    - Altitude/elevation fields mark airborne relays and inform LOS hints.
   - **Mesh Architect JSON**
     ```json
     {
@@ -82,6 +86,23 @@ Key context:
     - Nodes with `x`/`y` instead of `lat`/`lng` are mapped into the visible bounds; missing coordinates are auto-laid out.
 - On import, the app auto-lays out any nodes missing coordinates, centers/fits the map, and recomputes links with the current environment settings. Choose **Replace current mesh** or **Append to current mesh** before importing.
 - You can also restore the last saved session from localStorage.
+
+## Link modeling, LOS, and quality bands
+- Each pair of nodes forms a candidate link with a measured geodesic distance. Override it with an **Assumed distance** and pick **LOS / NLOS** (urban or foliage/terrain) per link to reflect rooftops, courtyards, or hillside obstructions.
+- The planner applies simple free-space path loss plus NLOS penalties using the current band and terrain/EW multipliers. Quality is categorized as:
+  - **Good:** Margin ≥ 8 dB under current assumptions.
+  - **Marginal:** -6 dB to 8 dB margin; expect fades or degraded throughput.
+  - **Unlikely:** Below -6 dB; treat as failed unless a relay or altitude change helps.
+- Nodes support optional `elevationMeters` (ASL) and `heightAboveGroundMeters` (mast/drone height). When both endpoints include elevation, the UI hints if radio horizons suggest LOS or likely masking.
+
+## Mesh robustness panel
+- The **Mesh Health** card lists node/link counts, critical link counts by quality, and any single-point-of-failure nodes (articulation points on the good/marginal/unlikely graph).
+- Bridges that are Marginal or Unlikely are highlighted as critical links to harden with relays, altitude, or spacing changes.
+
+## ATAK-friendly exports
+- **KML:** Point placemarks for nodes with role/band/range plus LOS-aware LineString features for links (quality-coded styles).
+- **GeoJSON:** Point and line features with link quality, LOS setting, and distance to drop directly into TAK or other GIS tools.
+- **CoT snapshot:** One-time CoT events for current node positions.
 
 ## Demo flows
 - **Preset AO dropdown** provides Urban, Rural valley, and Forward operating site scenarios with tuned environment assumptions and node placements.
