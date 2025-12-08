@@ -1,4 +1,5 @@
-const STORAGE_KEY = "ceradon-mesh-state-v0.2";
+const STORAGE_KEY = "ceradon-mesh-state-v0.3";
+
 const ROLE_DEFAULTS = {
   controller: { baseRange: 450, color: "var(--controller)" },
   relay: { baseRange: 380, color: "var(--relay)" },
@@ -32,9 +33,16 @@ const EW_MULTIPLIER = {
 };
 
 const mapDefaults = {
-  center: { lat: 40.76078, lng: -111.89105 },
-  zoom: 17
+  center: { lat: 40.7608, lng: -111.8910 },
+  zoom: 15
 };
+
+let map;
+let nodeMarkers = {};
+let linkLayers = [];
+let coverageCircle = null;
+let pendingPlacementRole = null;
+let selectedNodeId = null;
 
 const meshState = {
   environment: {
@@ -48,68 +56,68 @@ const meshState = {
   links: []
 };
 
-let selectedNodeId = null;
-let map;
-let linkLayers = [];
-let markerMap = new Map();
-let coverageCircle = null;
-let placementRole = null;
-
-function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(meshState));
+function showMapError(message) {
+  const banner = document.getElementById("map-error");
+  if (!banner) return;
+  banner.textContent = message;
+  banner.hidden = false;
 }
 
-function loadState() {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored) {
-    try {
-      const parsed = JSON.parse(stored);
-      Object.assign(meshState.environment, parsed.environment || {});
-      meshState.nodes = (parsed.nodes || []).map(ensureLatLng);
-      meshState.links = parsed.links || [];
-    } catch (e) {
-      console.warn("Failed to parse stored mesh", e);
-    }
+function saveToLocalStorage() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(meshState));
+    toggleRestoreVisibility();
+  } catch (err) {
+    console.warn("Unable to save state", err);
   }
 }
 
-function restoreLastSession() {
-  loadState();
-  recompute(false);
+function restoreFromLocalStorage() {
+  const stored = localStorage.getItem(STORAGE_KEY);
+  if (!stored) return;
+  try {
+    const parsed = JSON.parse(stored);
+    Object.assign(meshState.environment, parsed.environment || {});
+    meshState.nodes = (parsed.nodes || []).map(ensureLatLng);
+    syncEnvironmentInputs();
+    recomputeMesh(false);
+  } catch (err) {
+    console.warn("Failed to restore state", err);
+  }
 }
 
-function generateId(prefix) {
-  return `${prefix}-${Math.random().toString(36).slice(2, 7)}`;
+function toggleRestoreVisibility() {
+  const btn = document.getElementById("restore-btn");
+  if (!btn) return;
+  const stored = localStorage.getItem(STORAGE_KEY);
+  btn.style.display = stored ? "block" : "none";
 }
 
-function createNode(role, latlng) {
-  const defaults = ROLE_DEFAULTS[role];
-  const count = meshState.nodes.filter(n => n.role === role).length + 1;
-  const label = `${role === "client" ? "Client" : role.charAt(0).toUpperCase() + role.slice(1)} ${count}`;
-  const band = meshState.environment.primaryBand;
-  const base = latlng || offsetFromCenter();
-  return {
-    id: generateId(role),
-    label,
-    role,
-    band,
-    maxRangeMeters: defaults?.baseRange || 200,
-    lat: base.lat,
-    lng: base.lng,
-    altitudeMeters: role === "uxs" ? 100 : undefined,
-    source: "manual"
-  };
+function initMap() {
+  const mapEl = document.getElementById("mesh-map");
+  if (!mapEl || !window.L) {
+    showMapError("Map container missing or Leaflet unavailable.");
+    return;
+  }
+  try {
+    map = L.map("mesh-map").setView([mapDefaults.center.lat, mapDefaults.center.lng], mapDefaults.zoom);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+    enableMapPlacement();
+  } catch (err) {
+    console.error(err);
+    showMapError("Leaflet failed to initialize. Try refreshing.");
+  }
 }
 
-function offsetFromCenter() {
-  const center = map?.getCenter() || L.latLng(mapDefaults.center);
-  const latOffset = (Math.random() - 0.5) * 0.002;
-  const lngOffset = (Math.random() - 0.5) * 0.002;
-  return { lat: center.lat + latOffset, lng: center.lng + lngOffset };
-}
-
-function nodeColor(node) {
-  return ROLE_DEFAULTS[node.role]?.color || "var(--client)";
+function wireUI() {
+  attachEnvironmentHandlers();
+  attachNodeButtons();
+  attachImportExport();
+  populatePresetSelect();
+  toggleRestoreVisibility();
 }
 
 function attachEnvironmentHandlers() {
@@ -119,60 +127,105 @@ function attachEnvironmentHandlers() {
   const designRadius = document.getElementById("design-radius");
   const reliability = document.getElementById("target-reliability");
 
-  terrain.value = meshState.environment.terrain;
-  ew.value = meshState.environment.ewLevel;
-  band.value = meshState.environment.primaryBand;
-  designRadius.value = meshState.environment.designRadiusMeters;
-  reliability.value = meshState.environment.targetReliability;
+  syncEnvironmentInputs();
 
-  terrain.addEventListener("change", () => {
+  terrain?.addEventListener("change", () => {
     meshState.environment.terrain = terrain.value;
-    recompute();
+    recomputeMesh();
   });
-  ew.addEventListener("change", () => {
+  ew?.addEventListener("change", () => {
     meshState.environment.ewLevel = ew.value;
-    recompute();
+    recomputeMesh();
   });
-  band.addEventListener("change", () => {
+  band?.addEventListener("change", () => {
     meshState.environment.primaryBand = band.value;
-    recompute();
+    recomputeMesh();
   });
-  designRadius.addEventListener("input", () => {
+  designRadius?.addEventListener("input", () => {
     meshState.environment.designRadiusMeters = Number(designRadius.value) || 300;
-    recompute();
+    recomputeMesh();
   });
-  reliability.addEventListener("input", () => {
+  reliability?.addEventListener("input", () => {
     meshState.environment.targetReliability = Number(reliability.value) || 80;
-    renderOutputs();
-    saveState();
+    renderMeshSummary();
+    saveToLocalStorage();
   });
+}
+
+function syncEnvironmentInputs() {
+  const terrain = document.getElementById("terrain-select");
+  const ew = document.getElementById("ew-select");
+  const band = document.getElementById("band-select");
+  const designRadius = document.getElementById("design-radius");
+  const reliability = document.getElementById("target-reliability");
+
+  if (terrain) terrain.value = meshState.environment.terrain;
+  if (ew) ew.value = meshState.environment.ewLevel;
+  if (band) band.value = meshState.environment.primaryBand;
+  if (designRadius) designRadius.value = meshState.environment.designRadiusMeters;
+  if (reliability) reliability.value = meshState.environment.targetReliability;
+}
+
+function clearPlacementHighlight() {
+  document.querySelectorAll(".add-node").forEach(btn => btn.classList.remove("active"));
+}
+
+function setPendingPlacement(role) {
+  pendingPlacementRole = role;
+  clearPlacementHighlight();
+  const hint = document.getElementById("placement-hint");
+  if (!role) {
+    if (hint) hint.textContent = "";
+    return;
+  }
+  const btn = document.querySelector(`.add-node[data-node-role="${role}"]`);
+  btn?.classList.add("active");
+  if (hint) hint.textContent = `Placement ready: click on the map to drop a ${role}.`;
 }
 
 function attachNodeButtons() {
   document.querySelectorAll(".add-node").forEach(btn => {
     btn.addEventListener("click", () => {
-      placementRole = btn.getAttribute("data-node-role");
-      document.getElementById("placement-hint").textContent = `Click on the map to place a ${placementRole}.`;
+      setPendingPlacement(btn.getAttribute("data-node-role"));
     });
   });
 }
 
-function attachMapHandlers() {
-  map = L.map("mesh-map").setView([mapDefaults.center.lat, mapDefaults.center.lng], mapDefaults.zoom);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution: "&copy; OpenStreetMap contributors"
-  }).addTo(map);
-
-  map.on("click", evt => {
-    if (!placementRole) return;
-    const node = createNode(placementRole, evt.latlng);
-    placementRole = null;
-    document.getElementById("placement-hint").textContent = "";
-    meshState.nodes.push(node);
-    recompute();
-    focusNode(node.id);
+function enableMapPlacement() {
+  if (!map) return;
+  map.on("click", e => {
+    if (!pendingPlacementRole) return;
+    addNodeAtLatLng(pendingPlacementRole, e.latlng.lat, e.latlng.lng);
+    setPendingPlacement(null);
   });
+}
+
+function generateDefaultLabel(role) {
+  const count = meshState.nodes.filter(n => n.role === role).length + 1;
+  const name = role === "uxs" ? "UxS" : role.charAt(0).toUpperCase() + role.slice(1);
+  return `${name} ${count}`;
+}
+
+function defaultRangeForRole(role) {
+  return ROLE_DEFAULTS[role]?.baseRange || 200;
+}
+
+function addNodeAtLatLng(role, lat, lng) {
+  const id = `node-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const node = {
+    id,
+    label: generateDefaultLabel(role),
+    role,
+    band: meshState.environment.primaryBand || "2.4",
+    maxRangeMeters: defaultRangeForRole(role),
+    lat,
+    lng,
+    source: "manual"
+  };
+  meshState.nodes.push(node);
+  renderNodeMarker(node);
+  recomputeMesh();
+  saveToLocalStorage();
 }
 
 function markerIcon(role, selected) {
@@ -182,14 +235,57 @@ function markerIcon(role, selected) {
   });
 }
 
+function renderNodeMarker(node) {
+  if (!map) return;
+  const marker = L.marker([node.lat, node.lng], { draggable: true, icon: markerIcon(node.role, node.id === selectedNodeId) })
+    .addTo(map)
+    .bindPopup(`<strong>${node.label}</strong><br/>${node.role} • ${node.band} GHz`);
+
+  marker.on("click", () => focusNode(node.id));
+  marker.on("dragend", evt => {
+    const pos = evt.target.getLatLng();
+    node.lat = pos.lat;
+    node.lng = pos.lng;
+    recomputeMesh();
+  });
+
+  nodeMarkers[node.id] = marker;
+}
+
 function clearMarkers() {
-  markerMap.forEach(marker => marker.remove());
-  markerMap.clear();
+  Object.values(nodeMarkers).forEach(marker => marker.remove());
+  nodeMarkers = {};
+}
+
+function updateNodeMarkers() {
+  const existingIds = new Set(meshState.nodes.map(n => n.id));
+  Object.keys(nodeMarkers).forEach(id => {
+    if (!existingIds.has(id)) {
+      nodeMarkers[id].remove();
+      delete nodeMarkers[id];
+    }
+  });
+
+  meshState.nodes.forEach(node => {
+    const marker = nodeMarkers[node.id];
+    if (marker) {
+      marker.setLatLng([node.lat, node.lng]);
+      marker.setIcon(markerIcon(node.role, node.id === selectedNodeId));
+    } else {
+      renderNodeMarker(node);
+    }
+  });
 }
 
 function computeDistanceMeters(a, b) {
-  if (!map) return 0;
-  return Math.round(map.distance([a.lat, a.lng], [b.lat, b.lng]));
+  if (map && map.distance) return Math.round(map.distance([a.lat, a.lng], [b.lat, b.lng]));
+  const R = 6371000;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const lat1 = (a.lat * Math.PI) / 180;
+  const lat2 = (b.lat * Math.PI) / 180;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return Math.round(2 * R * Math.asin(Math.min(1, Math.sqrt(h))));
 }
 
 function effectiveRange(node) {
@@ -212,29 +308,10 @@ function recomputeLinks() {
       else if (distance <= 0.8 * range) quality = "marginal";
       else if (distance <= 1.2 * range) quality = "fragile";
 
-      links.push({
-        fromId: a.id,
-        toId: b.id,
-        distanceMeters: distance,
-        quality
-      });
+      links.push({ fromId: a.id, toId: b.id, distanceMeters: distance, quality });
     }
   }
   meshState.links = links;
-}
-
-function renderCoverageCircle() {
-  const primary = meshState.nodes.find(n => n.role === "controller");
-  if (!map) return;
-  if (coverageCircle) coverageCircle.remove();
-  if (!primary) return;
-  coverageCircle = L.circle([primary.lat, primary.lng], {
-    radius: meshState.environment.designRadiusMeters,
-    color: "#3a7bd5",
-    fillColor: "#3a7bd5",
-    fillOpacity: 0.12,
-    weight: 1.2
-  }).addTo(map);
 }
 
 function renderLinks() {
@@ -243,8 +320,7 @@ function renderLinks() {
   meshState.links.forEach(link => {
     const from = meshState.nodes.find(n => n.id === link.fromId);
     const to = meshState.nodes.find(n => n.id === link.toId);
-    if (!from || !to) return;
-    if (link.quality === "none") return;
+    if (!from || !to || link.quality === "none" || !map) return;
     const color = link.quality === "good" ? "#3ac177" : link.quality === "marginal" ? "#f2c14e" : "#f07f3c";
     const weight = link.quality === "fragile" ? 2 : 3;
     const poly = L.polyline(
@@ -252,39 +328,32 @@ function renderLinks() {
         [from.lat, from.lng],
         [to.lat, to.lng]
       ],
-      {
-        color,
-        weight,
-        opacity: 0.9
-      }
+      { color, weight, opacity: 0.9 }
     ).addTo(map);
     linkLayers.push(poly);
   });
 }
 
-function renderNodes() {
-  clearMarkers();
-  meshState.nodes.forEach(node => {
-    const marker = L.marker([node.lat, node.lng], {
-      draggable: true,
-      icon: markerIcon(node.role, node.id === selectedNodeId)
-    }).addTo(map);
-
-    marker.on("click", () => focusNode(node.id));
-    marker.on("dragend", e => {
-      const pos = e.target.getLatLng();
-      node.lat = pos.lat;
-      node.lng = pos.lng;
-      recompute();
-    });
-
-    marker.bindPopup(`<strong>${node.label}</strong><br/>${node.role} • ${node.band} GHz`);
-    markerMap.set(node.id, marker);
-  });
+function updateCoverageCircle() {
+  if (!map) return;
+  if (coverageCircle) {
+    map.removeLayer(coverageCircle);
+    coverageCircle = null;
+  }
+  const controller = meshState.nodes.find(n => n.role === "controller");
+  if (!controller) return;
+  coverageCircle = L.circle([controller.lat, controller.lng], {
+    radius: meshState.environment.designRadiusMeters,
+    color: "#888",
+    weight: 1,
+    dashArray: "4,4",
+    fillOpacity: 0.05
+  }).addTo(map);
 }
 
 function renderLinkSummary() {
   const tbody = document.getElementById("link-summary-body");
+  if (!tbody) return;
   tbody.innerHTML = "";
   const qualityRank = { none: 3, fragile: 2, marginal: 1, good: 0 };
   const sorted = [...meshState.links].sort((a, b) => {
@@ -301,12 +370,8 @@ function renderLinkSummary() {
     const cells = [from?.label || link.fromId, to?.label || link.toId, Math.round(link.distanceMeters), link.quality];
     cells.forEach((value, idx) => {
       const td = document.createElement("td");
-      if (idx === 3) {
-        td.textContent = value;
-        td.className = `quality-${value}`;
-      } else {
-        td.textContent = value;
-      }
+      td.textContent = value;
+      if (idx === 3) td.className = `quality-${value}`;
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
@@ -315,6 +380,7 @@ function renderLinkSummary() {
 
 function renderRecommendations() {
   const p = document.getElementById("recommendations");
+  if (!p) return;
   const relayCount = meshState.nodes.filter(n => n.role === "relay" || n.role === "uxs").length;
   const controllers = meshState.nodes.filter(n => n.role === "controller").length;
   const marginalOrBetter = meshState.links.filter(l => l.quality === "good" || l.quality === "marginal");
@@ -335,8 +401,8 @@ function renderRecommendations() {
 
 function renderCoverageHints() {
   const list = document.getElementById("coverage-hints");
+  if (!list) return;
   list.innerHTML = "";
-  const target = meshState.environment.targetReliability / 100;
   const hints = [];
 
   meshState.nodes.forEach(node => {
@@ -354,10 +420,7 @@ function renderCoverageHints() {
     return sum + l.distanceMeters / range;
   }, 0) / (meshState.links.length || 1);
 
-  if (avgRatio > 0.8) {
-    hints.push("Most links are near range limits; tighten spacing or add relays.");
-  }
-
+  if (avgRatio > 0.8) hints.push("Most links are near range limits; tighten spacing or add relays.");
   if (!hints.length) hints.push("No major blind spots detected at current layout.");
 
   hints.forEach(text => {
@@ -369,6 +432,7 @@ function renderCoverageHints() {
 
 function renderNodeDetails() {
   const container = document.getElementById("node-detail-content");
+  if (!container) return;
   if (!selectedNodeId) {
     container.textContent = "Select a node to edit its details.";
     return;
@@ -416,9 +480,9 @@ function renderNodeDetails() {
       node.band = bandSelect.value;
       node.maxRangeMeters = Number(rangeInput.value) || node.maxRangeMeters;
       node.altitudeMeters = altitudeInput.value ? Number(altitudeInput.value) : undefined;
-      const marker = markerMap.get(node.id);
+      const marker = nodeMarkers[node.id];
       if (marker) marker.setIcon(markerIcon(node.role, node.id === selectedNodeId));
-      recompute();
+      recomputeMesh();
     });
   });
 
@@ -427,7 +491,7 @@ function renderNodeDetails() {
   deleteBtn.addEventListener("click", () => {
     meshState.nodes = meshState.nodes.filter(n => n.id !== node.id);
     selectedNodeId = null;
-    recompute();
+    recomputeMesh();
   });
 
   container.appendChild(createLabeledField("Label", labelInput));
@@ -449,17 +513,11 @@ function createLabeledField(label, element) {
 
 function focusNode(nodeId) {
   selectedNodeId = nodeId;
-  markerMap.forEach((marker, id) => {
+  Object.entries(nodeMarkers).forEach(([id, marker]) => {
     const node = meshState.nodes.find(n => n.id === id);
     marker.setIcon(markerIcon(node?.role || "client", id === selectedNodeId));
   });
   renderNodeDetails();
-}
-
-function recompute(save = true) {
-  recomputeLinks();
-  render();
-  if (save) saveState();
 }
 
 function renderMeshSummary() {
@@ -479,8 +537,10 @@ function renderMeshSummary() {
   const totalLinks = meshState.links.length || 1;
   const goodShare = (qualityCounts.good + qualityCounts.marginal) / totalLinks;
   const health = goodShare >= 0.7 ? "Robust" : goodShare >= 0.4 ? "Marginal" : "Fragile";
-  summaryText.textContent = meshState.nodes.length ? `Network is ${health} under current assumptions.` : "Network is waiting for nodes.";
-  counts.textContent = `Ctrl ${totals.controller || 0} • Relays ${totals.relay || 0} • UxS ${totals.uxs || 0} • Sensors ${totals.sensor || 0} • Clients ${totals.client || 0} | Links G:${qualityCounts.good} M:${qualityCounts.marginal} F:${qualityCounts.fragile}`;
+  if (summaryText)
+    summaryText.textContent = meshState.nodes.length ? `Network is ${health} under current assumptions.` : "Network is waiting for nodes.";
+  if (counts)
+    counts.textContent = `Ctrl ${totals.controller || 0} • Relays ${totals.relay || 0} • UxS ${totals.uxs || 0} • Sensors ${totals.sensor || 0} • Clients ${totals.client || 0} | Links G:${qualityCounts.good} M:${qualityCounts.marginal} F:${qualityCounts.fragile}`;
 }
 
 function renderOutputs() {
@@ -491,39 +551,62 @@ function renderOutputs() {
   renderMeshSummary();
 }
 
-function render() {
+function renderAll() {
+  updateNodeMarkers();
   renderLinks();
-  renderNodes();
-  renderCoverageCircle();
+  updateCoverageCircle();
   renderOutputs();
 }
 
-function exportMesh() {
+function recomputeMesh(save = true) {
+  recomputeLinks();
+  renderAll();
+  if (save) saveToLocalStorage();
+}
+
+function exportMeshToText() {
   const payload = {
-    meshVersion: "0.2",
+    meshVersion: "0.3",
     environment: meshState.environment,
     nodes: meshState.nodes,
     links: meshState.links
   };
   const area = document.getElementById("json-area");
-  area.value = JSON.stringify(payload, null, 2);
+  if (area) area.value = JSON.stringify(payload, null, 2);
+  setImportStatus("Mesh copied to text area for review.", "muted");
 }
 
-function downloadMesh() {
+function downloadJson() {
   const now = new Date();
   const filename = `mesh-architect-export-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}.json`;
-  const blob = new Blob([JSON.stringify({
-    meshVersion: "0.2",
-    environment: meshState.environment,
-    nodes: meshState.nodes,
-    links: meshState.links
-  }, null, 2)], { type: "application/json" });
+  const blob = new Blob(
+    [
+      JSON.stringify(
+        {
+          meshVersion: "0.3",
+          environment: meshState.environment,
+          nodes: meshState.nodes,
+          links: meshState.links
+        },
+        null,
+        2
+      )
+    ],
+    { type: "application/json" }
+  );
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function setImportStatus(message, tone = "muted") {
+  const status = document.getElementById("import-status");
+  if (!status) return;
+  status.textContent = message;
+  status.style.color = tone === "error" ? "#ffb3b3" : "var(--muted)";
 }
 
 function importJson(text) {
@@ -533,38 +616,48 @@ function importJson(text) {
     if (parsed.meshVersion) {
       meshState.environment = { ...meshState.environment, ...(parsed.environment || {}) };
       meshState.nodes = (parsed.nodes || []).map(ensureLatLng);
+      syncEnvironmentInputs();
     } else if (parsed.source === "NodeArchitect") {
-      meshState.nodes = (parsed.nodes || []).map(n => ensureLatLng({
-        id: n.id || generateId("node"),
-        label: n.label || n.id || "Node",
-        role: n.role || "sensor",
-        band: String(n.band || meshState.environment.primaryBand),
-        maxRangeMeters: n.approxRangeMeters || ROLE_DEFAULTS[n.role]?.baseRange || 200,
-        x: n.x,
-        y: n.y,
-        source: "nodeArchitect"
-      }));
+      meshState.nodes = (parsed.nodes || []).map(n =>
+        ensureLatLng({
+          id: n.id || generateId("node"),
+          label: n.label || n.id || "Node",
+          role: n.role || "sensor",
+          band: String(n.band || meshState.environment.primaryBand),
+          maxRangeMeters: n.approxRangeMeters || ROLE_DEFAULTS[n.role]?.baseRange || 200,
+          x: n.x,
+          y: n.y,
+          source: "nodeArchitect"
+        })
+      );
     } else if (parsed.source === "UxSArchitect") {
-      meshState.nodes = (parsed.uxsPlatforms || []).map(n => ensureLatLng({
-        id: n.id || generateId("uxs"),
-        label: n.label || n.id || "UxS",
-        role: n.role || "uxs",
-        band: String(n.band || meshState.environment.primaryBand),
-        maxRangeMeters: n.maxRangeMeters || ROLE_DEFAULTS[n.role]?.baseRange || 400,
-        x: n.x,
-        y: n.y,
-        source: "uxsArchitect",
-        attachedPlatformId: n.attachedPlatformId
-      }));
+      meshState.nodes = (parsed.uxsPlatforms || []).map(n =>
+        ensureLatLng({
+          id: n.id || generateId("uxs"),
+          label: n.label || n.id || "UxS",
+          role: n.role || "uxs",
+          band: String(n.band || meshState.environment.primaryBand),
+          maxRangeMeters: n.maxRangeMeters || ROLE_DEFAULTS[n.role]?.baseRange || 400,
+          x: n.x,
+          y: n.y,
+          source: "uxsArchitect",
+          attachedPlatformId: n.attachedPlatformId
+        })
+      );
+    } else {
+      throw new Error("Unsupported JSON shape");
     }
-    recompute();
+    selectedNodeId = null;
+    recomputeMesh();
+    setImportStatus("Imported mesh successfully.");
   } catch (e) {
-    alert("Invalid JSON provided.");
+    console.warn("Invalid JSON", e);
+    setImportStatus("Invalid JSON provided. Please verify the format.", "error");
   }
 }
 
 function handleImport() {
-  const text = document.getElementById("json-area").value;
+  const text = document.getElementById("json-area")?.value || "";
   importJson(text);
 }
 
@@ -572,11 +665,13 @@ function handleFileImport(event) {
   const file = event.target.files?.[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = e => {
-    importJson(e.target.result);
-  };
-  reader.onerror = () => alert("Failed to read file");
+  reader.onload = e => importJson(e.target.result || "");
+  reader.onerror = () => setImportStatus("Failed to read file", "error");
   reader.readAsText(file);
+}
+
+function generateId(prefix) {
+  return `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function layoutNodes(nodes) {
@@ -584,7 +679,7 @@ function layoutNodes(nodes) {
   const center = map?.getCenter() || mapDefaults.center;
   const radiusLat = 0.0015;
   nodes.forEach((node, idx) => {
-    if (node.lat && node.lng) return;
+    if (node.lat != null && node.lng != null) return;
     const angle = (idx / count) * 2 * Math.PI;
     node.lat = center.lat + radiusLat * Math.cos(angle);
     node.lng = center.lng + radiusLat * Math.sin(angle);
@@ -593,7 +688,13 @@ function layoutNodes(nodes) {
 
 function ensureLatLng(node) {
   if (node.lat != null && node.lng != null) return node;
-  const center = map?.getCenter() || mapDefaults.center;
+  const bounds = map?.getBounds();
+  if (bounds) {
+    const lat = bounds.getSouth() + Math.random() * (bounds.getNorth() - bounds.getSouth());
+    const lng = bounds.getWest() + Math.random() * (bounds.getEast() - bounds.getWest());
+    return { ...node, lat, lng };
+  }
+  const center = mapDefaults.center;
   const span = 0.002;
   const mappedLat = center.lat + ((node.y ?? Math.random()) - 0.5) * span;
   const mappedLng = center.lng + ((node.x ?? Math.random()) - 0.5) * span;
@@ -602,59 +703,162 @@ function ensureLatLng(node) {
 
 function loadDemo() {
   const presetSelect = document.getElementById("preset-select");
-  const selected = presetSelect.value;
+  const selected = presetSelect?.value;
   const scenario = presetScenarios.find(s => s.id === selected);
   if (!scenario) {
     meshState.nodes = [];
     selectedNodeId = null;
-    recompute();
+    recomputeMesh();
     return;
   }
   meshState.environment = { ...meshState.environment, ...scenario.environment };
-  const { center } = scenario.environment;
-  if (center) {
-    map.setView([center.lat, center.lng], center.zoom || mapDefaults.zoom);
-  }
   meshState.nodes = scenario.nodes.map(n => ({ ...n, source: "demo" }));
+  syncEnvironmentInputs();
+  if (map && scenario.environment.center) {
+    map.setView([scenario.environment.center.lat, scenario.environment.center.lng], scenario.environment.center.zoom || mapDefaults.zoom);
+  }
   layoutNodes(meshState.nodes);
   selectedNodeId = null;
-  recompute();
+  recomputeMesh();
+  fitMapToNodes();
+}
+
+function fitMapToNodes() {
+  if (!map || !meshState.nodes.length) return;
+  const latlngs = meshState.nodes.map(n => [n.lat, n.lng]);
+  const bounds = L.latLngBounds(latlngs);
+  map.fitBounds(bounds.pad(0.2));
 }
 
 function attachImportExport() {
-  document.getElementById("export-btn").addEventListener("click", exportMesh);
-  document.getElementById("download-btn").addEventListener("click", downloadMesh);
-  document.getElementById("import-btn").addEventListener("click", handleImport);
-  document.getElementById("load-demo-btn").addEventListener("click", loadDemo);
-  document.getElementById("file-input").addEventListener("change", handleFileImport);
-  document.getElementById("reset-btn").addEventListener("click", () => {
+  document.getElementById("export-btn")?.addEventListener("click", exportMeshToText);
+  document.getElementById("download-btn")?.addEventListener("click", downloadJson);
+  document.getElementById("import-btn")?.addEventListener("click", handleImport);
+  document.getElementById("load-demo-btn")?.addEventListener("click", loadDemo);
+  document.getElementById("file-input")?.addEventListener("change", handleFileImport);
+  document.getElementById("reset-btn")?.addEventListener("click", () => {
     meshState.nodes = [];
     selectedNodeId = null;
-    recompute();
+    recomputeMesh();
   });
-  document.getElementById("restore-btn").addEventListener("click", restoreLastSession);
+  document.getElementById("restore-btn")?.addEventListener("click", restoreFromLocalStorage);
+  document.getElementById("export-kml-btn")?.addEventListener("click", exportMeshToKml);
+  document.getElementById("export-cot-btn")?.addEventListener("click", exportMeshToCot);
 }
 
 function populatePresetSelect() {
   const select = document.getElementById("preset-select");
-  presetScenarios.forEach(scenario => {
-    const opt = document.createElement("option");
-    opt.value = scenario.id;
-    opt.textContent = scenario.label;
-    select.appendChild(opt);
-  });
+  if (!select) return;
+  if (select.children.length === 1) {
+    presetScenarios.forEach(scenario => {
+      const opt = document.createElement("option");
+      opt.value = scenario.id;
+      opt.textContent = scenario.label;
+      select.appendChild(opt);
+    });
+  }
+}
+
+function downloadTextFile(filename, text, type = "text/plain") {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportMeshToKml() {
+  const now = new Date();
+  const filename = `mesh-architect-atak-overlay-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}.kml`;
+  const roleStyles = Object.keys(ROLE_DEFAULTS)
+    .map(role => `    <Style id="${role}">
+      <IconStyle>
+        <color>${role === "controller" ? "ff4c82ff" : role === "relay" ? "fff0a500" : role === "uxs" ? "fff38ba8" : role === "sensor" ? "ff55c57a" : "ffb7b7b7"}</color>
+        <scale>1.2</scale>
+      </IconStyle>
+      <LabelStyle><scale>0.9</scale></LabelStyle>
+    </Style>`)
+    .join("\n");
+
+  const linkStyles = `    <Style id="link-good"><LineStyle><color>ff77c33a</color><width>3</width></LineStyle></Style>
+    <Style id="link-marginal"><LineStyle><color>ff4ec1f2</color><width>3</width></LineStyle></Style>
+    <Style id="link-fragile"><LineStyle><color>ff3c7ff0</color><width>2</width></LineStyle></Style>`;
+
+  const nodePlacemarks = meshState.nodes
+    .map(
+      node => `    <Placemark>
+      <name>${node.label}</name>
+      <description>${node.role} • ${node.band} GHz • ${node.maxRangeMeters} m</description>
+      <styleUrl>#${node.role}</styleUrl>
+      <Point><coordinates>${node.lng},${node.lat},0</coordinates></Point>
+    </Placemark>`
+    )
+    .join("\n");
+
+  const linkPlacemarks = meshState.links
+    .filter(l => l.quality !== "none")
+    .map(link => {
+      const from = meshState.nodes.find(n => n.id === link.fromId);
+      const to = meshState.nodes.find(n => n.id === link.toId);
+      if (!from || !to) return "";
+      return `    <Placemark>
+      <name>${from.label} -> ${to.label} (${link.quality})</name>
+      <styleUrl>#link-${link.quality}</styleUrl>
+      <LineString><coordinates>${from.lng},${from.lat},0 ${to.lng},${to.lat},0</coordinates></LineString>
+    </Placemark>`;
+    })
+    .join("\n");
+
+  const kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+${roleStyles}
+${linkStyles}
+${nodePlacemarks}
+${linkPlacemarks}
+  </Document>
+</kml>`;
+
+  downloadTextFile(filename, kml, "application/vnd.google-earth.kml+xml");
+}
+
+function exportMeshToCot() {
+  const now = new Date();
+  const isoNow = now.toISOString();
+  const stale = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
+  const filename = `mesh-architect-atak-cot-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}.xml`;
+  const events = meshState.nodes
+    .map(
+      node => `<event version="2.0" type="a-f-G-U-C" uid="${node.id}" time="${isoNow}" start="${isoNow}" stale="${stale}">
+  <point lat="${node.lat}" lon="${node.lng}" hae="0" ce="9999999" le="9999999" />
+  <detail>
+    <contact callsign="${node.label}" />
+    <remarks>${node.role}, ${node.band} GHz, range ${node.maxRangeMeters} m</remarks>
+  </detail>
+</event>`
+    )
+    .join("\n");
+
+  const xml = `<cot>
+${events}
+</cot>`;
+  downloadTextFile(filename, xml, "text/xml");
+}
+
+function fitDesignToInputs() {
+  renderMeshSummary();
 }
 
 function init() {
-  attachMapHandlers();
-  loadState();
-  attachEnvironmentHandlers();
-  attachNodeButtons();
-  populatePresetSelect();
-  attachImportExport();
-  if (!meshState.nodes.length) saveState();
+  initMap();
+  wireUI();
+  fitDesignToInputs();
+  restoreFromLocalStorage();
   layoutNodes(meshState.nodes);
-  recompute(false);
+  recomputeMesh(false);
+  fitMapToNodes();
 }
 
 document.addEventListener("DOMContentLoaded", init);

@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Ceradon Mesh Architect v0.2</title>
+  <title>Ceradon Mesh Architect v0.3</title>
   <link
     rel="stylesheet"
     href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    integrity="sha256-sA+4J6kG+Z0pQ6vTgGs8G9iJTAcE2x8l0zF8aItnxwY="
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
     crossorigin=""
   />
   <link rel="stylesheet" href="styles.css" />
@@ -95,6 +95,8 @@
 
     <section class="panel center">
       <h2>Mesh Map / Node Graph</h2>
+      <div id="map-helper" class="muted">Select a role, then click on the map to place a node.</div>
+      <div id="map-error" class="error-banner" hidden>Leaflet failed to initialize. Refresh or check network access to tiles.</div>
       <div id="canvas-container">
         <div id="mesh-map"></div>
       </div>
@@ -144,13 +146,20 @@
           <button id="download-btn">Download JSON</button>
           <input type="file" id="file-input" accept="application/json" />
         </div>
+        <div id="import-status" class="muted status-message"></div>
+
+        <h4>Export for ATAK</h4>
+        <div class="button-grid">
+          <button id="export-kml-btn">Download ATAK KML</button>
+          <button id="export-cot-btn">Download ATAK CoT snapshot</button>
+        </div>
       </div>
     </section>
   </main>
 
   <script
     src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    integrity="sha256-o9N1j7kGQIOzBfrk6TxrXu01mGI38p2GIrShk0pCsYQ="
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
     crossorigin=""
   ></script>
   <script src="sample-data.js"></script>
