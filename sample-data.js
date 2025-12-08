@@ -67,5 +67,110 @@ const presetScenarios = [
       { id: "sensor-1", label: "Sensor East", role: "sensor", band: "1.2", maxRangeMeters: 260, lat: 29.4272, lng: -98.4937 },
       { id: "sensor-2", label: "Sensor West", role: "sensor", band: "1.2", maxRangeMeters: 260, lat: 29.4262, lng: -98.4896 }
     ]
+  },
+  {
+    id: "whitefrost",
+    label: "WHITEFROST Demo – alpine cold-weather mesh",
+    meshVersion: "0.3",
+    environment: {
+      terrain: "Open",
+      ewLevel: "Medium",
+      primaryBand: "2.4",
+      designRadiusMeters: 480,
+      targetReliability: 85,
+      center: { lat: 61.2923, lng: -149.5798, zoom: 14 },
+      temperatureC: -18,
+      windsMps: 12,
+      altitudeBand: "high-mountain"
+    },
+    constraints: [
+      {
+        id: "whitefrost-power",
+        type: "power",
+        description: "LiPo packs lose ~30% capacity below -15°C; pre-warm batteries and limit loiter time.",
+        severity: "caution"
+      },
+      {
+        id: "whitefrost-logistics",
+        type: "logistics",
+        description: "Partner-force sustainment sleds arrive every 12 hours; prioritize low-mass relays and shared packs.",
+        severity: "info"
+      }
+    ],
+    nodes: [
+      {
+        id: "controller-whitefrost-1",
+        label: "Logistics Shack Gateway",
+        role: "controller",
+        band: "2.4",
+        maxRangeMeters: 500,
+        lat: 61.2938,
+        lng: -149.5851,
+        elevationMeters: 870,
+        heightAboveGroundMeters: 4,
+        batteryHours: 18,
+        power_w: 15
+      },
+      {
+        id: "relay-whitefrost-north",
+        label: "North Ridge Relay",
+        role: "relay",
+        band: "2.4",
+        maxRangeMeters: 420,
+        lat: 61.2983,
+        lng: -149.5804,
+        elevationMeters: 980,
+        heightAboveGroundMeters: 6,
+        batteryHours: 12,
+        relayCandidate: true
+      },
+      {
+        id: "relay-whitefrost-east",
+        label: "East Spur Relay",
+        role: "relay",
+        band: "2.4",
+        maxRangeMeters: 420,
+        lat: 61.2926,
+        lng: -149.572,
+        elevationMeters: 940,
+        heightAboveGroundMeters: 5,
+        batteryHours: 10
+      },
+      {
+        id: "uxs-whitefrost-scout",
+        label: "Recon Quad (3D-printed)",
+        role: "uxs",
+        band: "2.4",
+        maxRangeMeters: 650,
+        lat: 61.2894,
+        lng: -149.5772,
+        elevationMeters: 880,
+        heightAboveGroundMeters: 120,
+        isAirborne: true,
+        batteryHours: 0.5
+      },
+      {
+        id: "sensor-whitefrost-cache",
+        label: "Sustainment Drop Sensor",
+        role: "sensor",
+        band: "2.4",
+        maxRangeMeters: 260,
+        lat: 61.2886,
+        lng: -149.5838,
+        elevationMeters: 860,
+        batteryHours: 48
+      },
+      {
+        id: "client-whitefrost-partner",
+        label: "Partner Patrol Tablet",
+        role: "client",
+        band: "2.4",
+        maxRangeMeters: 220,
+        lat: 61.2913,
+        lng: -149.5751,
+        elevationMeters: 875,
+        batteryHours: 10
+      }
+    ]
   }
 ];

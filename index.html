@@ -51,6 +51,16 @@
       margin-bottom: 0.75rem;
     }
 
+    #access-gate .muted {
+      color: #334155;
+      font-size: 0.95rem;
+    }
+
+    #access-gate a {
+      color: #1454b8;
+      font-weight: 600;
+    }
+
     #access-gate button {
       display: inline-block;
       padding: 0.65rem 1.25rem;
@@ -152,31 +162,8 @@
     <input id="demo-code" type="password" autocomplete="off" />
     <button id="demo-enter">Enter</button>
     <div id="demo-error" class="error-message">Invalid code.</div>
+    <p class="muted" style="margin-top: 0.5rem">Need a demo code? Email <a href="mailto:contact@ceradonsystems.com?subject=Demo%20code%20request%20%E2%80%93%20Ceradon%20Mesh%20Architect">contact@ceradonsystems.com</a> from your org account.</p>
   </div>
-
-  <section id="demo-banner" class="demo-banner demo-request">
-    <button id="demo-banner-close" aria-label="Hide demo banner">× Hide for this device</button>
-    <div class="demo-request-inner">
-      <h2>Request a demo code</h2>
-      <p>
-        Ceradon Mesh Architect is part of a field-focused RF planning suite. Request a demo code to unlock the live planner for
-        your team.
-      </p>
-      <div class="demo-request-actions">
-        <a
-          id="demo-request-button"
-          class="demo-request-btn"
-          href="mailto:contact@ceradonsystems.com?subject=Demo%20code%20request%20%E2%80%93%20Ceradon%20Mission%20Architect&body=Hi%20Ceradon%20team,%0D%0A%0D%0AI'd%20like%20to%20request%20a%20demo%20access%20code%20for%20Ceradon%20Mission%20Architect.%0D%0A%0D%0AOrganization:%20%0D%0AUse%20case:%20%0D%0ATimeline:%20%0D%0A%0D%0AThank%20you."
-        >
-          Request a demo code
-        </a>
-
-        <p class="demo-request-email">
-          Or email <a href="mailto:contact@ceradonsystems.com?subject=Demo%20code%20request%20%E2%80%93%20Ceradon%20Mission%20Architect">contact@ceradonsystems.com</a> with your org name and use case.
-        </p>
-      </div>
-    </div>
-  </section>
 
   <div id="app-root" style="display: none">
     <header class="app-header">
@@ -188,7 +175,7 @@
         </p>
       </div>
       <div class="import-export">
-        <button id="export-btn">Export current mesh JSON</button>
+        <button id="export-btn">Export MissionProject JSON</button>
         <button id="reset-btn" title="Clear all nodes and environment">Reset to blank state</button>
       </div>
     </header>
@@ -345,20 +332,22 @@
         <div class="section">
           <h3>Import / Export</h3>
           <p class="muted">
-            Mesh Architect ingests Node Architect nodes, UxS Architect platforms, or full Mesh Architect JSON. Import replaces the
-            current plan by default; switch to append if you are merging catalogs.
+            Mesh Architect ingests MissionProject JSON plus Node Architect nodes, UxS Architect platforms, or legacy Mesh Architect JSON.
+            Import replaces the current plan by default; switch to append if you are merging catalogs.
           </p>
           <div class="import-mode">
             <label><input type="radio" name="import-mode" value="replace" checked /> Replace current mesh</label>
             <label><input type="radio" name="import-mode" value="append" /> Append to current mesh</label>
           </div>
-          <textarea id="json-area" placeholder="Paste Node/UXS/Mesh JSON here"></textarea>
+          <textarea id="json-area" placeholder="Paste MissionProject / Node / UxS / Mesh JSON here"></textarea>
           <div class="button-grid">
             <button id="import-btn">Import from text</button>
-            <button id="download-btn">Download JSON</button>
+            <button id="download-btn">Download MissionProject JSON</button>
           </div>
 
           <div class="import-files">
+            <label for="mission-file-input">Load MissionProject JSON file…</label>
+            <input type="file" id="mission-file-input" accept="application/json" />
             <label for="node-file-input">Load Node Architect JSON file…</label>
             <input type="file" id="node-file-input" accept="application/json" />
             <label for="uxs-file-input">Load UxS Architect JSON file…</label>
@@ -366,13 +355,14 @@
             <label for="mesh-file-input">Load Mesh Architect JSON file…</label>
             <input type="file" id="mesh-file-input" accept="application/json" />
           </div>
+          <div id="import-error-banner" class="error-banner" hidden></div>
           <div id="import-status" class="muted status-message"></div>
 
           <h4>Export for TAK / ATAK</h4>
           <div class="button-grid">
             <button id="export-kml-btn">Download ATAK KML</button>
             <button id="export-geojson-btn">Download GeoJSON</button>
-            <button id="export-cot-btn">Download ATAK CoT snapshot</button>
+            <button id="export-cot-btn">Download CoT-style JSON snapshot</button>
           </div>
         </div>
       </section>
@@ -394,8 +384,10 @@
       function showApp() {
         const gate = document.getElementById("access-gate");
         const appRoot = document.getElementById("app-root");
+        const demoBanner = document.getElementById("demo-banner");
         if (gate) gate.style.display = "none";
         if (appRoot) appRoot.style.display = "block";
+        if (demoBanner) demoBanner.style.display = "none";
       }
 
       function showError() {

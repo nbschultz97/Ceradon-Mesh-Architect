@@ -20,14 +20,15 @@ Key context:
 ## Basic usage
 1. Set environment sliders: terrain, EW/interference level, and primary band.
 2. Define coverage goals: design radius and desired link reliability.
-3. Choose a preset Area of Operations (AO) in **Quick Demo** and click **Load demo scenario**, or pick **None** for a blank map.
+3. Choose a preset Area of Operations (AO) in **Quick Demo** and click **Load demo scenario**, or pick **WHITEFROST Demo** for the alpine cold-weather mesh preset, or **None** for a blank map.
 4. Add nodes using the catalog buttons, then click the map to place each node. Drag markers to reposition; popups show labels/roles.
 5. Review link quality lines on-map plus the **Link Summary** (sorted worst first), recommendations, coverage hints, and mesh snapshot (node/role counts and link health). Each link row lets you override assumed distance and LOS/NLOS so the quality calculation stays honest.
 6. Export the mesh JSON for sharing, or import Node Architect / UxS Architect / saved Mesh Architect JSON. Import defaults to replace; you can switch to append.
 
 ## Import and export
-- **Export current mesh JSON** populates a JSON block containing the environment, nodes (with `lat`/`lng`), and computed links. You can also download a timestamped file (`mesh-architect-export-YYYYMMDD-HHMM.json`).
-- **Export for TAK / ATAK** produces KML, GeoJSON, or Cursor-on-Target (CoT) snapshots with node/link metadata (role, band, range, LOS assumption, and link quality) ready for ingestion by TAK Server or other map viewers.
+- **MissionProject schema:** Mesh Architect now reads/writes a shared `MissionProject` JSON across the Architect stack (see `docs/mission_project_schema.md`). Export or download the MissionProject snapshot to move missions across tools without extra glue.
+- **Export current mesh JSON** populates a JSON block containing the environment, nodes (with `lat`/`lng`), and computed links. You can also download a timestamped file (`mission-project-YYYYMMDD-HHMM.json`).
+- **Export for TAK / ATAK** produces KML, GeoJSON, or CoT-style JSON snapshots with node/link metadata (role, band, range, LOS assumption, and link quality) ready for ingestion by TAK Server or other map viewers (see `docs/atak_exports.md`).
 - **Import** options (paste JSON or load a `.json` file):
   - **Node Architect JSON**
     ```json
