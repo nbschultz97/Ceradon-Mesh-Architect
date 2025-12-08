@@ -11,151 +11,225 @@
     crossorigin=""
   />
   <link rel="stylesheet" href="styles.css" />
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    #access-gate {
+      max-width: 560px;
+      margin: 6vh auto 0;
+      padding: 1.5rem;
+      border: 1px solid #d4d4d4;
+      border-radius: 8px;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+      background: #fff;
+    }
+
+    #access-gate h1 {
+      margin: 0 0 0.5rem;
+      font-size: 1.5rem;
+    }
+
+    #access-gate p {
+      margin: 0 0 1rem;
+      color: #444;
+    }
+
+    #access-gate label {
+      display: block;
+      margin-bottom: 0.35rem;
+      font-weight: 600;
+    }
+
+    #access-gate input {
+      width: 100%;
+      padding: 0.65rem;
+      font-size: 1rem;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      margin-bottom: 0.75rem;
+    }
+
+    #access-gate button {
+      display: inline-block;
+      padding: 0.65rem 1.25rem;
+      font-size: 1rem;
+      border-radius: 6px;
+      border: none;
+      background: #1f6feb;
+      color: #fff;
+      cursor: pointer;
+    }
+
+    #access-gate button:hover {
+      background: #1454b8;
+    }
+
+    .error-message {
+      color: #b91c1c;
+      margin-top: 0.5rem;
+      display: none;
+    }
+  </style>
 </head>
 <body>
-  <header class="app-header">
-    <div>
-      <h1>Ceradon Mesh Architect v0.2 – Map-Based Mesh Planner (Demo)</h1>
-      <p class="subtitle">Leaflet map, draggable nodes, and fast presets for live demos.</p>
-    </div>
-    <div class="import-export">
-      <button id="export-btn">Export current mesh JSON</button>
-      <button id="reset-btn" title="Clear all nodes and environment">Reset to blank state</button>
-    </div>
-  </header>
+  <div id="access-gate">
+    <h1>Ceradon Systems — Ceradon Mesh Architect Demo</h1>
+    <p>Enter your demo access code to continue.</p>
+    <label for="demo-code">Access code</label>
+    <input id="demo-code" type="password" autocomplete="off" />
+    <button id="demo-enter">Enter</button>
+    <div id="demo-error" class="error-message">Invalid code.</div>
+  </div>
 
-  <main class="layout">
-    <section class="panel left">
-      <h2>Environment &amp; Inputs</h2>
-
-      <div class="section">
-        <h3>Environment &amp; RF Difficulty</h3>
-        <label for="terrain-select">Terrain</label>
-        <select id="terrain-select">
-          <option>Indoor</option>
-          <option>Dense urban</option>
-          <option>Urban</option>
-          <option>Suburban</option>
-          <option>Rural</option>
-          <option>Open</option>
-        </select>
-
-        <label for="ew-select">EW / Interference Level</label>
-        <select id="ew-select">
-          <option>Low</option>
-          <option>Medium</option>
-          <option>High</option>
-          <option>Severe</option>
-        </select>
-
-        <label for="band-select">Primary Band</label>
-        <select id="band-select">
-          <option value="900">900 MHz</option>
-          <option value="1.2">1.2 GHz</option>
-          <option value="2.4">2.4 GHz</option>
-          <option value="5.8">5.8 GHz</option>
-          <option value="other">Other</option>
-        </select>
+  <div id="app-root" style="display: none">
+    <header class="app-header">
+      <div>
+        <h1>Ceradon Mesh Architect v0.2 – Map-Based Mesh Planner (Demo)</h1>
+        <p class="subtitle">Leaflet map, draggable nodes, and fast presets for live demos.</p>
       </div>
-
-      <div class="section">
-        <h3>Coverage Goal</h3>
-        <label for="design-radius">Design radius (m)</label>
-        <input type="number" id="design-radius" value="300" min="50" step="10" />
-
-        <label for="target-reliability">Desired minimum link reliability (%)</label>
-        <input type="number" id="target-reliability" value="80" min="10" max="100" step="5" />
+      <div class="import-export">
+        <button id="export-btn">Export current mesh JSON</button>
+        <button id="reset-btn" title="Clear all nodes and environment">Reset to blank state</button>
       </div>
+    </header>
 
-      <div class="section">
-        <h3>Node / UxS Catalog</h3>
-        <p class="muted">Click a role, then click on the map to place it.</p>
-        <div class="button-grid">
-          <button data-node-role="controller" class="add-node">Add controller</button>
-          <button data-node-role="relay" class="add-node">Add ground relay</button>
-          <button data-node-role="uxs" class="add-node">Add aerial relay (UxS)</button>
-          <button data-node-role="sensor" class="add-node">Add sensor node</button>
-          <button data-node-role="client" class="add-node">Add client / handset</button>
+    <main class="layout">
+      <section class="panel left">
+        <h2>Environment &amp; Inputs</h2>
+
+        <div class="section">
+          <h3>Environment &amp; RF Difficulty</h3>
+          <label for="terrain-select">Terrain</label>
+          <select id="terrain-select">
+            <option>Indoor</option>
+            <option>Dense urban</option>
+            <option>Urban</option>
+            <option>Suburban</option>
+            <option>Rural</option>
+            <option>Open</option>
+          </select>
+
+          <label for="ew-select">EW / Interference Level</label>
+          <select id="ew-select">
+            <option>Low</option>
+            <option>Medium</option>
+            <option>High</option>
+            <option>Severe</option>
+          </select>
+
+          <label for="band-select">Primary Band</label>
+          <select id="band-select">
+            <option value="900">900 MHz</option>
+            <option value="1.2">1.2 GHz</option>
+            <option value="2.4">2.4 GHz</option>
+            <option value="5.8">5.8 GHz</option>
+            <option value="other">Other</option>
+          </select>
         </div>
-        <div id="placement-hint" class="muted"></div>
-      </div>
 
-      <div class="section">
-        <h3>Quick Demo</h3>
-        <label for="preset-select">Preset AO</label>
-        <select id="preset-select">
-          <option value="none">None (blank map)</option>
-        </select>
-        <div class="button-grid">
-          <button id="load-demo-btn">Load demo scenario</button>
-          <button id="restore-btn">Restore last session</button>
+        <div class="section">
+          <h3>Coverage Goal</h3>
+          <label for="design-radius">Design radius (m)</label>
+          <input type="number" id="design-radius" value="300" min="50" step="10" />
+
+          <label for="target-reliability">Desired minimum link reliability (%)</label>
+          <input type="number" id="target-reliability" value="80" min="10" max="100" step="5" />
         </div>
-      </div>
-    </section>
 
-    <section class="panel center">
-      <h2>Mesh Map / Node Graph</h2>
-      <div id="map-helper" class="muted">Select a role, then click on the map to place a node.</div>
-      <div id="map-error" class="error-banner" hidden>Leaflet failed to initialize. Refresh or check network access to tiles.</div>
-      <div id="canvas-container">
-        <div id="mesh-map"></div>
-      </div>
-    </section>
-
-    <section class="panel right">
-      <h2>Outputs &amp; Hints</h2>
-
-      <div class="summary-card" id="mesh-summary">
-        <div>
-          <div class="summary-title">Mesh Snapshot</div>
-          <div id="mesh-health">Network is waiting for nodes.</div>
+        <div class="section">
+          <h3>Node / UxS Catalog</h3>
+          <p class="muted">Click a role, then click on the map to place it.</p>
+          <div class="button-grid">
+            <button data-node-role="controller" class="add-node">Add controller</button>
+            <button data-node-role="relay" class="add-node">Add ground relay</button>
+            <button data-node-role="uxs" class="add-node">Add aerial relay (UxS)</button>
+            <button data-node-role="sensor" class="add-node">Add sensor node</button>
+            <button data-node-role="client" class="add-node">Add client / handset</button>
+          </div>
+          <div id="placement-hint" class="muted"></div>
         </div>
-        <div id="mesh-counts" class="muted"></div>
-      </div>
 
-      <div class="section" id="link-summary-section">
-        <h3>Link Summary</h3>
-        <table>
-          <thead>
-            <tr><th>From</th><th>To</th><th>Distance (m)</th><th>Predicted quality</th></tr>
-          </thead>
-          <tbody id="link-summary-body"></tbody>
-        </table>
-      </div>
-
-      <div class="section">
-        <h3>Relay / Gateway Recommendations</h3>
-        <p id="recommendations"></p>
-      </div>
-
-      <div class="section">
-        <h3>Blind-spot &amp; Coverage Hints</h3>
-        <ul id="coverage-hints"></ul>
-      </div>
-
-      <div class="section" id="node-detail-section">
-        <h3>Node Details</h3>
-        <div id="node-detail-content">Select a node to edit its details.</div>
-      </div>
-
-      <div class="section">
-        <h3>Import / Export</h3>
-        <textarea id="json-area" placeholder="Paste Node/UXS JSON here"></textarea>
-        <div class="button-grid">
-          <button id="import-btn">Import</button>
-          <button id="download-btn">Download JSON</button>
-          <input type="file" id="file-input" accept="application/json" />
+        <div class="section">
+          <h3>Quick Demo</h3>
+          <label for="preset-select">Preset AO</label>
+          <select id="preset-select">
+            <option value="none">None (blank map)</option>
+          </select>
+          <div class="button-grid">
+            <button id="load-demo-btn">Load demo scenario</button>
+            <button id="restore-btn">Restore last session</button>
+          </div>
         </div>
-        <div id="import-status" class="muted status-message"></div>
+      </section>
 
-        <h4>Export for ATAK</h4>
-        <div class="button-grid">
-          <button id="export-kml-btn">Download ATAK KML</button>
-          <button id="export-cot-btn">Download ATAK CoT snapshot</button>
+      <section class="panel center">
+        <h2>Mesh Map / Node Graph</h2>
+        <div id="map-helper" class="muted">Select a role, then click on the map to place a node.</div>
+        <div id="map-error" class="error-banner" hidden>
+          Leaflet failed to initialize. Refresh or check network access to tiles.
         </div>
-      </div>
-    </section>
-  </main>
+        <div id="canvas-container">
+          <div id="mesh-map"></div>
+        </div>
+      </section>
+
+      <section class="panel right">
+        <h2>Outputs &amp; Hints</h2>
+
+        <div class="summary-card" id="mesh-summary">
+          <div>
+            <div class="summary-title">Mesh Snapshot</div>
+            <div id="mesh-health">Network is waiting for nodes.</div>
+          </div>
+          <div id="mesh-counts" class="muted"></div>
+        </div>
+
+        <div class="section" id="link-summary-section">
+          <h3>Link Summary</h3>
+          <table>
+            <thead>
+              <tr><th>From</th><th>To</th><th>Distance (m)</th><th>Predicted quality</th></tr>
+            </thead>
+            <tbody id="link-summary-body"></tbody>
+          </table>
+        </div>
+
+        <div class="section">
+          <h3>Relay / Gateway Recommendations</h3>
+          <p id="recommendations"></p>
+        </div>
+
+        <div class="section">
+          <h3>Blind-spot &amp; Coverage Hints</h3>
+          <ul id="coverage-hints"></ul>
+        </div>
+
+        <div class="section" id="node-detail-section">
+          <h3>Node Details</h3>
+          <div id="node-detail-content">Select a node to edit its details.</div>
+        </div>
+
+        <div class="section">
+          <h3>Import / Export</h3>
+          <textarea id="json-area" placeholder="Paste Node/UXS JSON here"></textarea>
+          <div class="button-grid">
+            <button id="import-btn">Import</button>
+            <button id="download-btn">Download JSON</button>
+            <input type="file" id="file-input" accept="application/json" />
+          </div>
+          <div id="import-status" class="muted status-message"></div>
+
+          <h4>Export for ATAK</h4>
+          <div class="button-grid">
+            <button id="export-kml-btn">Download ATAK KML</button>
+            <button id="export-cot-btn">Download ATAK CoT snapshot</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
 
   <script
     src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -164,5 +238,59 @@
   ></script>
   <script src="sample-data.js"></script>
   <script src="mesh.js"></script>
+  <script>
+    (function () {
+      const ACCESS_CODE = "MESH-GHOST-347";
+      const STORAGE_KEY = "ceradonDemoAuthorized";
+
+      function showApp() {
+        const gate = document.getElementById("access-gate");
+        const appRoot = document.getElementById("app-root");
+        if (gate) gate.style.display = "none";
+        if (appRoot) appRoot.style.display = "block";
+      }
+
+      function showError() {
+        const errorEl = document.getElementById("demo-error");
+        if (errorEl) errorEl.style.display = "block";
+      }
+
+      function handleSubmit() {
+        const input = document.getElementById("demo-code");
+        const value = (input?.value || "").trim();
+        if (value === ACCESS_CODE) {
+          localStorage.setItem(STORAGE_KEY, "true");
+          showApp();
+        } else {
+          showError();
+        }
+      }
+
+      window.addEventListener("DOMContentLoaded", () => {
+        const appRoot = document.getElementById("app-root");
+        const gate = document.getElementById("access-gate");
+        const input = document.getElementById("demo-code");
+        const button = document.getElementById("demo-enter");
+
+        if (localStorage.getItem(STORAGE_KEY) === "true") {
+          showApp();
+          return;
+        }
+
+        if (gate) gate.style.display = "block";
+        if (appRoot) appRoot.style.display = "none";
+
+        if (button) button.addEventListener("click", handleSubmit);
+        if (input) {
+          input.addEventListener("keydown", (evt) => {
+            if (evt.key === "Enter") {
+              evt.preventDefault();
+              handleSubmit();
+            }
+          });
+        }
+      });
+    })();
+  </script>
 </body>
 </html>
