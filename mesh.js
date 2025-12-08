@@ -1,4 +1,8 @@
 const STORAGE_KEY = "ceradon-mesh-state-v0.3";
+const DEMO_BANNER_KEY = "meshDemoBannerDismissed";
+
+const VALID_ROLES = ["controller", "relay", "sensor", "client", "uxs"];
+const VALID_BANDS = ["900", "1.2", "2.4", "5.8", "other"];
 
 const ROLE_DEFAULTS = {
   controller: { baseRange: 450, color: "var(--controller)" },
@@ -118,6 +122,21 @@ function wireUI() {
   attachImportExport();
   populatePresetSelect();
   toggleRestoreVisibility();
+}
+
+// Dismissible banner for demo CTA; hides once per device using localStorage.
+function initDemoBanner() {
+  const banner = document.getElementById("demo-banner");
+  if (!banner) return;
+  if (localStorage.getItem(DEMO_BANNER_KEY) === "true") {
+    banner.classList.add("hidden");
+    return;
+  }
+  const close = document.getElementById("demo-banner-close");
+  close?.addEventListener("click", () => {
+    banner.classList.add("hidden");
+    localStorage.setItem(DEMO_BANNER_KEY, "true");
+  });
 }
 
 function attachEnvironmentHandlers() {
@@ -355,7 +374,7 @@ function renderLinkSummary() {
   const tbody = document.getElementById("link-summary-body");
   if (!tbody) return;
   tbody.innerHTML = "";
-  const qualityRank = { none: 3, fragile: 2, marginal: 1, good: 0 };
+  const qualityRank = { fragile: 3, marginal: 2, good: 1, none: 0 };
   const sorted = [...meshState.links].sort((a, b) => {
     const qa = qualityRank[a.quality];
     const qb = qualityRank[b.quality];
@@ -540,7 +559,7 @@ function renderMeshSummary() {
   if (summaryText)
     summaryText.textContent = meshState.nodes.length ? `Network is ${health} under current assumptions.` : "Network is waiting for nodes.";
   if (counts)
-    counts.textContent = `Ctrl ${totals.controller || 0} • Relays ${totals.relay || 0} • UxS ${totals.uxs || 0} • Sensors ${totals.sensor || 0} • Clients ${totals.client || 0} | Links G:${qualityCounts.good} M:${qualityCounts.marginal} F:${qualityCounts.fragile}`;
+    counts.textContent = `Nodes ${meshState.nodes.length} (Ctrl ${totals.controller || 0} • Relays ${totals.relay || 0} • UxS ${totals.uxs || 0} • Sensors ${totals.sensor || 0} • Clients ${totals.client || 0}) | Links ${meshState.links.length} (Good ${qualityCounts.good} • Marginal ${qualityCounts.marginal} • Fragile ${qualityCounts.fragile})`;
 }
 
 function renderOutputs() {
@@ -609,63 +628,155 @@ function setImportStatus(message, tone = "muted") {
   status.style.color = tone === "error" ? "#ffb3b3" : "var(--muted)";
 }
 
-function importJson(text) {
-  if (!text.trim()) return;
+function normalizeRole(role) {
+  const normalized = String(role || "").toLowerCase();
+  if (!VALID_ROLES.includes(normalized)) {
+    throw new Error(`Unsupported role: ${role}`);
+  }
+  return normalized;
+}
+
+function normalizeBand(band) {
+  const str = String(band ?? meshState.environment.primaryBand ?? "2.4");
+  if (!VALID_BANDS.includes(str)) {
+    throw new Error(`Unsupported band: ${band}`);
+  }
+  return str;
+}
+
+function getImportMode() {
+  const checked = document.querySelector('input[name="import-mode"]:checked');
+  return checked?.value === "append" ? "append" : "replace";
+}
+
+function importNodeArchitect(json) {
+  if (json.source !== "NodeArchitect" || !Array.isArray(json.nodes)) {
+    throw new Error("Expected NodeArchitect JSON with a nodes array.");
+  }
+  const nodes = json.nodes.map((n, idx) => {
+    const role = normalizeRole(n.role || "sensor");
+    const band = normalizeBand(n.band);
+    return {
+      id: n.id || generateId("node"),
+      label: n.label || n.id || `Node ${idx + 1}`,
+      role,
+      band,
+      maxRangeMeters: n.maxRangeMeters || ROLE_DEFAULTS[role]?.baseRange || 200,
+      lat: n.lat ?? null,
+      lng: n.lng ?? null,
+      source: "nodeArchitect",
+      notes: n.notes
+    };
+  });
+  return { nodes };
+}
+
+function importUxSArchitect(json) {
+  if (json.source !== "UxSArchitect" || !Array.isArray(json.uxsPlatforms)) {
+    throw new Error("Expected UxSArchitect JSON with a uxsPlatforms array.");
+  }
+  const nodes = json.uxsPlatforms.map((n, idx) => {
+    const band = normalizeBand(n.band);
+    return {
+      id: n.id || generateId("uxs"),
+      label: n.label || n.id || `UxS ${idx + 1}`,
+      role: "uxs",
+      band,
+      maxRangeMeters: n.maxRangeMeters || ROLE_DEFAULTS.uxs.baseRange,
+      lat: n.lat ?? null,
+      lng: n.lng ?? null,
+      carriedNodeIds: n.carriedNodeIds || [],
+      source: "uxsArchitect",
+      notes: n.notes
+    };
+  });
+  return { nodes };
+}
+
+function importMeshArchitect(json) {
+  if (!json.meshVersion && !Array.isArray(json.nodes)) {
+    throw new Error("Expected Mesh Architect JSON with meshVersion or nodes.");
+  }
+  const nodes = (json.nodes || []).map(node => ({
+    id: node.id || generateId("node"),
+    label: node.label || node.id || "Node",
+    role: normalizeRole(node.role || "sensor"),
+    band: normalizeBand(node.band),
+    maxRangeMeters: node.maxRangeMeters || defaultRangeForRole(node.role || "sensor"),
+    lat: node.lat ?? null,
+    lng: node.lng ?? null,
+    x: node.x,
+    y: node.y,
+    source: node.source || "meshImport"
+  }));
+  return { nodes, environment: json.environment };
+}
+
+function applyImportResult(result, mode = "replace") {
+  const nodes = (result.nodes || []).map(ensureLatLng);
+  const environment = result.environment;
+  if (mode === "append") {
+    meshState.nodes = meshState.nodes.concat(nodes);
+  } else {
+    meshState.nodes = nodes;
+  }
+  if (environment) {
+    meshState.environment = { ...meshState.environment, ...environment };
+    syncEnvironmentInputs();
+  }
+  layoutNodes(meshState.nodes);
+  selectedNodeId = null;
+  recomputeMesh();
+  fitMapToNodes();
+  setImportStatus(mode === "append" ? "Imported and appended nodes." : "Imported mesh successfully.");
+}
+
+function handleParsedImport(parsed) {
+  const mode = getImportMode();
   try {
-    const parsed = JSON.parse(text);
-    if (parsed.meshVersion) {
-      meshState.environment = { ...meshState.environment, ...(parsed.environment || {}) };
-      meshState.nodes = (parsed.nodes || []).map(ensureLatLng);
-      syncEnvironmentInputs();
-    } else if (parsed.source === "NodeArchitect") {
-      meshState.nodes = (parsed.nodes || []).map(n =>
-        ensureLatLng({
-          id: n.id || generateId("node"),
-          label: n.label || n.id || "Node",
-          role: n.role || "sensor",
-          band: String(n.band || meshState.environment.primaryBand),
-          maxRangeMeters: n.approxRangeMeters || ROLE_DEFAULTS[n.role]?.baseRange || 200,
-          x: n.x,
-          y: n.y,
-          source: "nodeArchitect"
-        })
-      );
+    if (parsed.source === "NodeArchitect") {
+      applyImportResult(importNodeArchitect(parsed), mode);
     } else if (parsed.source === "UxSArchitect") {
-      meshState.nodes = (parsed.uxsPlatforms || []).map(n =>
-        ensureLatLng({
-          id: n.id || generateId("uxs"),
-          label: n.label || n.id || "UxS",
-          role: n.role || "uxs",
-          band: String(n.band || meshState.environment.primaryBand),
-          maxRangeMeters: n.maxRangeMeters || ROLE_DEFAULTS[n.role]?.baseRange || 400,
-          x: n.x,
-          y: n.y,
-          source: "uxsArchitect",
-          attachedPlatformId: n.attachedPlatformId
-        })
-      );
+      applyImportResult(importUxSArchitect(parsed), mode);
+    } else if (parsed.meshVersion || parsed.environment || parsed.nodes) {
+      applyImportResult(importMeshArchitect(parsed), mode);
     } else {
-      throw new Error("Unsupported JSON shape");
+      throw new Error("Unsupported JSON payload. Provide Node, UxS, or Mesh Architect JSON.");
     }
-    selectedNodeId = null;
-    recomputeMesh();
-    setImportStatus("Imported mesh successfully.");
   } catch (e) {
     console.warn("Invalid JSON", e);
-    setImportStatus("Invalid JSON provided. Please verify the format.", "error");
+    setImportStatus(e.message || "Invalid JSON provided. Please verify the format.", "error");
   }
 }
 
 function handleImport() {
   const text = document.getElementById("json-area")?.value || "";
-  importJson(text);
+  if (!text.trim()) return setImportStatus("Paste JSON to import.", "error");
+  try {
+    const parsed = JSON.parse(text);
+    handleParsedImport(parsed);
+  } catch (err) {
+    setImportStatus("Invalid JSON provided. Please verify the format.", "error");
+  }
 }
 
-function handleFileImport(event) {
+function handleFileImport(event, importer) {
   const file = event.target.files?.[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = e => importJson(e.target.result || "");
+  reader.onload = e => {
+    try {
+      const parsed = JSON.parse(e.target.result || "");
+      if (importer) {
+        applyImportResult(importer(parsed), getImportMode());
+      } else {
+        handleParsedImport(parsed);
+      }
+    } catch (err) {
+      console.warn("Failed import", err);
+      setImportStatus(err.message || "Invalid JSON provided.", "error");
+    }
+  };
   reader.onerror = () => setImportStatus("Failed to read file", "error");
   reader.readAsText(file);
 }
@@ -674,31 +785,38 @@ function generateId(prefix) {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// Autoplace nodes missing coordinates around the current map center in a compact grid.
 function layoutNodes(nodes) {
-  const count = nodes.length || 1;
+  const missing = nodes.filter(n => n.lat == null || n.lng == null);
+  if (!missing.length) return;
   const center = map?.getCenter() || mapDefaults.center;
-  const radiusLat = 0.0015;
-  nodes.forEach((node, idx) => {
-    if (node.lat != null && node.lng != null) return;
-    const angle = (idx / count) * 2 * Math.PI;
-    node.lat = center.lat + radiusLat * Math.cos(angle);
-    node.lng = center.lng + radiusLat * Math.sin(angle);
+  const grid = Math.ceil(Math.sqrt(missing.length));
+  const spacing = 0.0012;
+  missing.forEach((node, idx) => {
+    const row = Math.floor(idx / grid);
+    const col = idx % grid;
+    const offset = (grid - 1) / 2;
+    node.lat = center.lat + (row - offset) * spacing;
+    node.lng = center.lng + (col - offset) * spacing;
   });
 }
 
 function ensureLatLng(node) {
   if (node.lat != null && node.lng != null) return node;
-  const bounds = map?.getBounds();
-  if (bounds) {
-    const lat = bounds.getSouth() + Math.random() * (bounds.getNorth() - bounds.getSouth());
-    const lng = bounds.getWest() + Math.random() * (bounds.getEast() - bounds.getWest());
-    return { ...node, lat, lng };
+  if (node.x != null || node.y != null) {
+    const bounds = map?.getBounds();
+    if (bounds) {
+      const lat = bounds.getSouth() + (node.y ?? 0.5) * (bounds.getNorth() - bounds.getSouth());
+      const lng = bounds.getWest() + (node.x ?? 0.5) * (bounds.getEast() - bounds.getWest());
+      return { ...node, lat, lng };
+    }
+    const center = mapDefaults.center;
+    const span = 0.002;
+    const mappedLat = center.lat + ((node.y ?? 0.5) - 0.5) * span;
+    const mappedLng = center.lng + ((node.x ?? 0.5) - 0.5) * span;
+    return { ...node, lat: mappedLat, lng: mappedLng };
   }
-  const center = mapDefaults.center;
-  const span = 0.002;
-  const mappedLat = center.lat + ((node.y ?? Math.random()) - 0.5) * span;
-  const mappedLng = center.lng + ((node.x ?? Math.random()) - 0.5) * span;
-  return { ...node, lat: mappedLat, lng: mappedLng };
+  return { ...node, lat: null, lng: null };
 }
 
 function loadDemo() {
@@ -735,7 +853,9 @@ function attachImportExport() {
   document.getElementById("download-btn")?.addEventListener("click", downloadJson);
   document.getElementById("import-btn")?.addEventListener("click", handleImport);
   document.getElementById("load-demo-btn")?.addEventListener("click", loadDemo);
-  document.getElementById("file-input")?.addEventListener("change", handleFileImport);
+  document.getElementById("node-file-input")?.addEventListener("change", e => handleFileImport(e, importNodeArchitect));
+  document.getElementById("uxs-file-input")?.addEventListener("change", e => handleFileImport(e, importUxSArchitect));
+  document.getElementById("mesh-file-input")?.addEventListener("change", e => handleFileImport(e, importMeshArchitect));
   document.getElementById("reset-btn")?.addEventListener("click", () => {
     meshState.nodes = [];
     selectedNodeId = null;
@@ -854,6 +974,7 @@ function fitDesignToInputs() {
 function init() {
   initMap();
   wireUI();
+  initDemoBanner();
   fitDesignToInputs();
   restoreFromLocalStorage();
   layoutNodes(meshState.nodes);

@@ -154,12 +154,13 @@
     <div id="demo-error" class="error-message">Invalid code.</div>
   </div>
 
-  <section id="demo-request" class="demo-request">
+  <section id="demo-banner" class="demo-banner demo-request">
+    <button id="demo-banner-close" aria-label="Hide demo banner">× Hide for this device</button>
     <div class="demo-request-inner">
       <h2>Request a demo code</h2>
       <p>
-        Ceradon Systems provides controlled access to <strong>Ceradon Mission Architect</strong> for qualified organizations.
-        Request a demo code to explore the live planner and see how it fits your mission profiles.
+        Ceradon Mesh Architect is part of a field-focused RF planning suite. Request a demo code to unlock the live planner for
+        your team.
       </p>
       <div class="demo-request-actions">
         <a
@@ -171,9 +172,7 @@
         </a>
 
         <p class="demo-request-email">
-          Or email us at
-          <a href="mailto:contact@ceradonsystems.com?subject=Demo%20code%20request%20%E2%80%93%20Ceradon%20Mission%20Architect">contact@ceradonsystems.com</a>
-          with your organization and use case.
+          Or email <a href="mailto:contact@ceradonsystems.com?subject=Demo%20code%20request%20%E2%80%93%20Ceradon%20Mission%20Architect">contact@ceradonsystems.com</a> with your org name and use case.
         </p>
       </div>
     </div>
@@ -182,14 +181,34 @@
   <div id="app-root" style="display: none">
     <header class="app-header">
       <div>
-        <h1>Ceradon Mesh Architect v0.2 – Map-Based Mesh Planner (Demo)</h1>
-        <p class="subtitle">Leaflet map, draggable nodes, and fast presets for live demos.</p>
+        <h1>Ceradon Mesh Architect v0.3 – RF mesh planner for controllers, relays, sensors, clients, and UxS</h1>
+        <p class="subtitle">
+          Mid-weight RF mesh planning between heavyweight propagation suites and ad-hoc field tests. Tune terrain and EW sliders,
+          plan in the bands you actually fly, and export overlays for TAK.
+        </p>
       </div>
       <div class="import-export">
         <button id="export-btn">Export current mesh JSON</button>
         <button id="reset-btn" title="Clear all nodes and environment">Reset to blank state</button>
       </div>
     </header>
+
+    <div class="demo-flow" aria-label="Demo flow guidance">
+      <strong>Demo flow:</strong>
+      <span>1) Pick a preset AO.</span>
+      <span>2) Drag nodes on the map.</span>
+      <span>3) Export JSON or ATAK overlay.</span>
+    </div>
+
+    <section class="stack-callout">
+      <h3>Where it fits in the Ceradon Architect Stack</h3>
+      <ul>
+        <li><strong>Node Architect:</strong> define compute + radios + antennas + power.</li>
+        <li><strong>UxS Architect:</strong> define air/ground platforms that can carry those nodes.</li>
+        <li><strong>Mesh Architect:</strong> place nodes in a real AO and stress RF/EW assumptions.</li>
+        <li><strong>KitSmith / Mission Architect:</strong> turn architectures into kits and mission cards.</li>
+      </ul>
+    </section>
 
     <main class="layout">
       <section class="panel left">
@@ -262,7 +281,9 @@
 
       <section class="panel center">
         <h2>Mesh Map / Node Graph</h2>
-        <div id="map-helper" class="muted">Select a role, then click on the map to place a node.</div>
+        <div id="map-helper" class="muted">
+          Terrain + EW sliders reflect why LOS is rarely guaranteed. Drag nodes to see which links hold up under interference.
+        </div>
         <div id="map-error" class="error-banner" hidden>
           Leaflet failed to initialize. Refresh or check network access to tiles.
         </div>
@@ -309,15 +330,31 @@
 
         <div class="section">
           <h3>Import / Export</h3>
-          <textarea id="json-area" placeholder="Paste Node/UXS JSON here"></textarea>
+          <p class="muted">
+            Mesh Architect ingests Node Architect nodes, UxS Architect platforms, or full Mesh Architect JSON. Import replaces the
+            current plan by default; switch to append if you are merging catalogs.
+          </p>
+          <div class="import-mode">
+            <label><input type="radio" name="import-mode" value="replace" checked /> Replace current mesh</label>
+            <label><input type="radio" name="import-mode" value="append" /> Append to current mesh</label>
+          </div>
+          <textarea id="json-area" placeholder="Paste Node/UXS/Mesh JSON here"></textarea>
           <div class="button-grid">
-            <button id="import-btn">Import</button>
+            <button id="import-btn">Import from text</button>
             <button id="download-btn">Download JSON</button>
-            <input type="file" id="file-input" accept="application/json" />
+          </div>
+
+          <div class="import-files">
+            <label for="node-file-input">Load Node Architect JSON file…</label>
+            <input type="file" id="node-file-input" accept="application/json" />
+            <label for="uxs-file-input">Load UxS Architect JSON file…</label>
+            <input type="file" id="uxs-file-input" accept="application/json" />
+            <label for="mesh-file-input">Load Mesh Architect JSON file…</label>
+            <input type="file" id="mesh-file-input" accept="application/json" />
           </div>
           <div id="import-status" class="muted status-message"></div>
 
-          <h4>Export for ATAK</h4>
+          <h4>Export for TAK / ATAK</h4>
           <div class="button-grid">
             <button id="export-kml-btn">Download ATAK KML</button>
             <button id="export-cot-btn">Download ATAK CoT snapshot</button>
