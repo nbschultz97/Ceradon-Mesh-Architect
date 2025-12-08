@@ -303,11 +303,25 @@
           <div id="mesh-counts" class="muted"></div>
         </div>
 
+        <div class="section" id="mesh-health-section">
+          <h3>Mesh Health</h3>
+          <div id="mesh-health-summary" class="muted"></div>
+          <div id="mesh-critical-counts" class="muted"></div>
+          <div>
+            <strong>Single-point-of-failure nodes</strong>
+            <ul id="mesh-spof-list"></ul>
+          </div>
+          <div>
+            <strong>Critical links flagged</strong>
+            <ul id="mesh-critical-links"></ul>
+          </div>
+        </div>
+
         <div class="section" id="link-summary-section">
           <h3>Link Summary</h3>
           <table>
             <thead>
-              <tr><th>From</th><th>To</th><th>Distance (m)</th><th>Predicted quality</th></tr>
+              <tr><th>From</th><th>To</th><th>Assumed distance (m)</th><th>LOS / NLOS</th><th>Quality</th><th>Notes</th></tr>
             </thead>
             <tbody id="link-summary-body"></tbody>
           </table>
@@ -357,6 +371,7 @@
           <h4>Export for TAK / ATAK</h4>
           <div class="button-grid">
             <button id="export-kml-btn">Download ATAK KML</button>
+            <button id="export-geojson-btn">Download GeoJSON</button>
             <button id="export-cot-btn">Download ATAK CoT snapshot</button>
           </div>
         </div>

@@ -12,6 +12,13 @@ const ROLE_DEFAULTS = {
   client: { baseRange: 180, color: "var(--client)" }
 };
 
+const LOS_OPTIONS = ["LOS", "NLOS-urban", "NLOS-foliage/terrain"];
+const LOS_PENALTY_DB = {
+  LOS: 0,
+  "NLOS-urban": 18,
+  "NLOS-foliage/terrain": 12
+};
+
 const BAND_FACTOR = {
   "900": 1.3,
   "1.2": 1.1,
@@ -307,6 +314,25 @@ function computeDistanceMeters(a, b) {
   return Math.round(2 * R * Math.asin(Math.min(1, Math.sqrt(h))));
 }
 
+function defaultLosForTerrain(terrain) {
+  if (terrain === "Dense urban" || terrain === "Indoor") return "NLOS-urban";
+  if (terrain === "Urban") return "NLOS-urban";
+  if (terrain === "Suburban") return "NLOS-foliage/terrain";
+  return "LOS";
+}
+
+function freeSpacePathLoss(distanceMeters, freqMHz) {
+  const km = Math.max(distanceMeters, 1) / 1000;
+  const mhz = Math.max(freqMHz, 1);
+  return 32.44 + 20 * Math.log10(km) + 20 * Math.log10(mhz);
+}
+
+function losEstimateFromHeights(distanceMeters, a, b) {
+  if (a == null || b == null) return null;
+  const horizonKm = 3.57 * (Math.sqrt(Math.max(a, 0)) + Math.sqrt(Math.max(b, 0)));
+  return distanceMeters / 1000 <= horizonKm;
+}
+
 function effectiveRange(node) {
   const bandFactor = BAND_FACTOR[node.band] ?? 1;
   const terrain = TERRAIN_MULTIPLIER[meshState.environment.terrain] ?? 1;
@@ -314,20 +340,50 @@ function effectiveRange(node) {
   return node.maxRangeMeters * bandFactor * terrain * ew;
 }
 
+function estimateLinkQuality(a, b, distanceMeters, losType) {
+  const freq = Number(a.band) || Number(b.band) || Number(meshState.environment.primaryBand) || 2.4;
+  const freqMHz = freq * 1000;
+  const penalty = LOS_PENALTY_DB[losType] ?? LOS_PENALTY_DB[defaultLosForTerrain(meshState.environment.terrain)];
+  const effectiveRangeMeters = Math.max(10, Math.min(effectiveRange(a), effectiveRange(b)));
+  const lossAtRange = freeSpacePathLoss(effectiveRangeMeters, freqMHz);
+  const lossAtDistance = freeSpacePathLoss(distanceMeters, freqMHz) + penalty;
+  const marginDb = lossAtRange - lossAtDistance;
+  if (marginDb >= 8) return "good";
+  if (marginDb >= -6) return "marginal";
+  return "unlikely";
+}
+
+function linkKey(a, b) {
+  return [a, b].sort().join("::");
+}
+
 function recomputeLinks() {
+  const existing = new Map(meshState.links.map(l => [linkKey(l.fromId, l.toId), l]));
   const links = [];
   for (let i = 0; i < meshState.nodes.length; i++) {
     for (let j = i + 1; j < meshState.nodes.length; j++) {
       const a = meshState.nodes[i];
       const b = meshState.nodes[j];
-      const distance = computeDistanceMeters(a, b);
-      const range = Math.min(effectiveRange(a), effectiveRange(b));
-      let quality = "none";
-      if (distance <= 0.4 * range) quality = "good";
-      else if (distance <= 0.8 * range) quality = "marginal";
-      else if (distance <= 1.2 * range) quality = "fragile";
+      const key = linkKey(a.id, b.id);
+      const prior = existing.get(key) || {};
+      const measuredDistance = computeDistanceMeters(a, b);
+      const distanceMeters = prior.distanceOverrideMeters ?? measuredDistance;
+      const losType = prior.los || defaultLosForTerrain(meshState.environment.terrain);
+      const elevationA = (a.elevationMeters ?? a.altitudeMeters ?? 0) + (a.heightAboveGroundMeters ?? 0);
+      const elevationB = (b.elevationMeters ?? b.altitudeMeters ?? 0) + (b.heightAboveGroundMeters ?? 0);
+      const losHint = losEstimateFromHeights(measuredDistance, elevationA, elevationB);
+      const quality = estimateLinkQuality(a, b, distanceMeters, losType);
 
-      links.push({ fromId: a.id, toId: b.id, distanceMeters: distance, quality });
+      links.push({
+        fromId: a.id,
+        toId: b.id,
+        distanceMeters,
+        measuredDistanceMeters: measuredDistance,
+        distanceOverrideMeters: prior.distanceOverrideMeters,
+        los: losType,
+        losEstimate: losHint,
+        quality
+      });
     }
   }
   meshState.links = links;
@@ -339,15 +395,16 @@ function renderLinks() {
   meshState.links.forEach(link => {
     const from = meshState.nodes.find(n => n.id === link.fromId);
     const to = meshState.nodes.find(n => n.id === link.toId);
-    if (!from || !to || link.quality === "none" || !map) return;
+    if (!from || !to || !map) return;
     const color = link.quality === "good" ? "#3ac177" : link.quality === "marginal" ? "#f2c14e" : "#f07f3c";
-    const weight = link.quality === "fragile" ? 2 : 3;
+    const weight = link.quality === "unlikely" ? 2 : 3;
+    const dashArray = link.quality === "unlikely" ? "6,4" : undefined;
     const poly = L.polyline(
       [
         [from.lat, from.lng],
         [to.lat, to.lng]
       ],
-      { color, weight, opacity: 0.9 }
+      { color, weight, opacity: 0.85, dashArray }
     ).addTo(map);
     linkLayers.push(poly);
   });
@@ -374,7 +431,7 @@ function renderLinkSummary() {
   const tbody = document.getElementById("link-summary-body");
   if (!tbody) return;
   tbody.innerHTML = "";
-  const qualityRank = { fragile: 3, marginal: 2, good: 1, none: 0 };
+  const qualityRank = { unlikely: 1, marginal: 2, good: 3 };
   const sorted = [...meshState.links].sort((a, b) => {
     const qa = qualityRank[a.quality];
     const qb = qualityRank[b.quality];
@@ -386,11 +443,53 @@ function renderLinkSummary() {
     const tr = document.createElement("tr");
     const from = meshState.nodes.find(n => n.id === link.fromId);
     const to = meshState.nodes.find(n => n.id === link.toId);
-    const cells = [from?.label || link.fromId, to?.label || link.toId, Math.round(link.distanceMeters), link.quality];
+    const distanceInput = document.createElement("input");
+    distanceInput.type = "number";
+    distanceInput.min = 1;
+    distanceInput.step = 10;
+    distanceInput.value = Math.round(link.distanceMeters);
+    distanceInput.addEventListener("change", () => {
+      link.distanceOverrideMeters = Number(distanceInput.value) || link.distanceMeters;
+      recomputeMesh();
+    });
+
+    const losSelect = document.createElement("select");
+    LOS_OPTIONS.forEach(option => {
+      const opt = document.createElement("option");
+      opt.value = option;
+      opt.textContent = option;
+      if (option === link.los) opt.selected = true;
+      losSelect.appendChild(opt);
+    });
+    losSelect.addEventListener("change", () => {
+      link.los = losSelect.value;
+      recomputeMesh();
+    });
+
+    const losHint = document.createElement("div");
+    losHint.className = "muted";
+    if (link.losEstimate != null) {
+      losHint.textContent = link.losEstimate ? "Horizon suggests LOS" : "Likely terrain/clutter masking";
+    } else {
+      losHint.textContent = `Measured ${Math.round(link.measuredDistanceMeters)} m`;
+    }
+
+    const cells = [
+      from?.label || link.fromId,
+      to?.label || link.toId,
+      distanceInput,
+      losSelect,
+      link.quality,
+      losHint
+    ];
     cells.forEach((value, idx) => {
       const td = document.createElement("td");
-      td.textContent = value;
-      if (idx === 3) td.className = `quality-${value}`;
+      if (value instanceof HTMLElement) {
+        td.appendChild(value);
+      } else {
+        td.textContent = value;
+      }
+      if (idx === 4) td.className = `quality-${link.quality}`;
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
@@ -401,10 +500,12 @@ function renderRecommendations() {
   const p = document.getElementById("recommendations");
   if (!p) return;
   const relayCount = meshState.nodes.filter(n => n.role === "relay" || n.role === "uxs").length;
+  const relayCandidates = meshState.nodes.filter(n => n.relayCandidate).length;
+  const airborneRelays = meshState.nodes.filter(n => n.isAirborne || n.role === "uxs").length;
   const controllers = meshState.nodes.filter(n => n.role === "controller").length;
   const marginalOrBetter = meshState.links.filter(l => l.quality === "good" || l.quality === "marginal");
   const isolated = meshState.links.filter(l => l.quality !== "good" && l.quality !== "marginal").length;
-  let text = `Relays: ${relayCount}. Controllers/Gateways: ${controllers}. `;
+  let text = `Relays: ${relayCount} (candidates ${relayCandidates}${airborneRelays ? `, airborne ${airborneRelays}` : ""}). Controllers/Gateways: ${controllers}. `;
   if (meshState.environment.ewLevel === "High" || meshState.environment.ewLevel === "Severe") {
     text += "High EW: prioritize redundancy and frequency diversity. ";
   }
@@ -486,19 +587,26 @@ function renderNodeDetails() {
   rangeInput.min = 50;
   rangeInput.step = 10;
 
-  const altitudeInput = document.createElement("input");
-  altitudeInput.type = "number";
-  altitudeInput.value = node.altitudeMeters ?? "";
-  altitudeInput.placeholder = "Optional (meters)";
-  altitudeInput.step = 10;
+  const elevationInput = document.createElement("input");
+  elevationInput.type = "number";
+  elevationInput.value = node.elevationMeters ?? node.altitudeMeters ?? "";
+  elevationInput.placeholder = "Elevation ASL (m) optional";
+  elevationInput.step = 10;
 
-  [labelInput, roleSelect, bandSelect, rangeInput, altitudeInput].forEach(el => {
+  const mastInput = document.createElement("input");
+  mastInput.type = "number";
+  mastInput.value = node.heightAboveGroundMeters ?? "";
+  mastInput.placeholder = "Height above ground (m)";
+  mastInput.step = 5;
+
+  [labelInput, roleSelect, bandSelect, rangeInput, elevationInput, mastInput].forEach(el => {
     el.addEventListener("input", () => {
       node.label = labelInput.value;
       node.role = roleSelect.value;
       node.band = bandSelect.value;
       node.maxRangeMeters = Number(rangeInput.value) || node.maxRangeMeters;
-      node.altitudeMeters = altitudeInput.value ? Number(altitudeInput.value) : undefined;
+      node.elevationMeters = elevationInput.value ? Number(elevationInput.value) : undefined;
+      node.heightAboveGroundMeters = mastInput.value ? Number(mastInput.value) : undefined;
       const marker = nodeMarkers[node.id];
       if (marker) marker.setIcon(markerIcon(node.role, node.id === selectedNodeId));
       recomputeMesh();
@@ -517,7 +625,8 @@ function renderNodeDetails() {
   container.appendChild(createLabeledField("Role", roleSelect));
   container.appendChild(createLabeledField("Band", bandSelect));
   container.appendChild(createLabeledField("Max range (m)", rangeInput));
-  container.appendChild(createLabeledField("Altitude (m, optional)", altitudeInput));
+  container.appendChild(createLabeledField("Elevation (m ASL, optional)", elevationInput));
+  container.appendChild(createLabeledField("Height above ground (m, optional)", mastInput));
   container.appendChild(deleteBtn);
 }
 
@@ -551,7 +660,7 @@ function renderMeshSummary() {
       acc[link.quality] = (acc[link.quality] || 0) + 1;
       return acc;
     },
-    { good: 0, marginal: 0, fragile: 0, none: 0 }
+    { good: 0, marginal: 0, unlikely: 0 }
   );
   const totalLinks = meshState.links.length || 1;
   const goodShare = (qualityCounts.good + qualityCounts.marginal) / totalLinks;
@@ -559,7 +668,109 @@ function renderMeshSummary() {
   if (summaryText)
     summaryText.textContent = meshState.nodes.length ? `Network is ${health} under current assumptions.` : "Network is waiting for nodes.";
   if (counts)
-    counts.textContent = `Nodes ${meshState.nodes.length} (Ctrl ${totals.controller || 0} • Relays ${totals.relay || 0} • UxS ${totals.uxs || 0} • Sensors ${totals.sensor || 0} • Clients ${totals.client || 0}) | Links ${meshState.links.length} (Good ${qualityCounts.good} • Marginal ${qualityCounts.marginal} • Fragile ${qualityCounts.fragile})`;
+    counts.textContent = `Nodes ${meshState.nodes.length} (Ctrl ${totals.controller || 0} • Relays ${totals.relay || 0} • UxS ${totals.uxs || 0} • Sensors ${totals.sensor || 0} • Clients ${totals.client || 0}) | Links ${meshState.links.length} (Good ${qualityCounts.good} • Marginal ${qualityCounts.marginal} • Unlikely ${qualityCounts.unlikely})`;
+}
+
+function analyzeMeshRobustness() {
+  const viableLinks = meshState.links.filter(l => l.quality === "good" || l.quality === "marginal" || l.quality === "unlikely");
+  const idIndex = new Map(meshState.nodes.map((n, idx) => [n.id, idx]));
+  const adj = meshState.nodes.map(() => []);
+  viableLinks.forEach(link => {
+    const u = idIndex.get(link.fromId);
+    const v = idIndex.get(link.toId);
+    if (u == null || v == null) return;
+    adj[u].push({ v, link });
+    adj[v].push({ v: u, link });
+  });
+
+  const disc = Array(meshState.nodes.length).fill(-1);
+  const low = Array(meshState.nodes.length).fill(-1);
+  const parent = Array(meshState.nodes.length).fill(-1);
+  const articulation = new Set();
+  const criticalBridges = [];
+  let time = 0;
+
+  function dfs(u) {
+    disc[u] = low[u] = ++time;
+    let children = 0;
+    adj[u].forEach(({ v, link }) => {
+      if (disc[v] === -1) {
+        children++;
+        parent[v] = u;
+        dfs(v);
+        low[u] = Math.min(low[u], low[v]);
+        if (parent[u] === -1 && children > 1) articulation.add(u);
+        if (parent[u] !== -1 && low[v] >= disc[u]) articulation.add(u);
+        if (low[v] > disc[u]) criticalBridges.push(link);
+      } else if (v !== parent[u]) {
+        low[u] = Math.min(low[u], disc[v]);
+      }
+    });
+  }
+
+  meshState.nodes.forEach((_, idx) => {
+    if (disc[idx] === -1) dfs(idx);
+  });
+
+  const spofNodes = Array.from(articulation).map(idx => meshState.nodes[idx]);
+  const criticalCounts = criticalBridges.reduce(
+    (acc, l) => {
+      acc[l.quality] = (acc[l.quality] || 0) + 1;
+      return acc;
+    },
+    { good: 0, marginal: 0, unlikely: 0 }
+  );
+
+  return { spofNodes, criticalBridges, criticalCounts };
+}
+
+function renderMeshHealthPanel() {
+  const { spofNodes, criticalBridges, criticalCounts } = analyzeMeshRobustness();
+  const healthSummary = document.getElementById("mesh-health-summary");
+  const counts = document.getElementById("mesh-critical-counts");
+  const spofList = document.getElementById("mesh-spof-list");
+  const critList = document.getElementById("mesh-critical-links");
+  if (healthSummary)
+    healthSummary.textContent = `Nodes ${meshState.nodes.length} | Links ${meshState.links.length} | Critical links flagged ${criticalBridges.length}`;
+  if (counts)
+    counts.textContent = `Critical links by quality – Good ${criticalCounts.good || 0}, Marginal ${criticalCounts.marginal || 0}, Unlikely ${criticalCounts.unlikely || 0}`;
+  if (spofList) {
+    spofList.innerHTML = "";
+    if (!spofNodes.length) {
+      const li = document.createElement("li");
+      li.textContent = "None detected on current good/marginal graph.";
+      spofList.appendChild(li);
+    } else {
+      spofNodes.forEach(n => {
+        const li = document.createElement("li");
+        li.textContent = `${n.label} (${n.role})`;
+        spofList.appendChild(li);
+      });
+    }
+  }
+  if (critList) {
+    critList.innerHTML = "";
+    if (!criticalBridges.length) {
+      const li = document.createElement("li");
+      li.textContent = "No critical links in marginal/unlikely state.";
+      critList.appendChild(li);
+    } else {
+      criticalBridges
+        .filter(l => l.quality === "marginal" || l.quality === "unlikely")
+        .forEach(link => {
+          const from = meshState.nodes.find(n => n.id === link.fromId);
+          const to = meshState.nodes.find(n => n.id === link.toId);
+          const li = document.createElement("li");
+          li.textContent = `${from?.label || link.fromId} ↔ ${to?.label || link.toId} (${link.quality})`;
+          critList.appendChild(li);
+        });
+      if (!critList.children.length) {
+        const li = document.createElement("li");
+        li.textContent = "Critical links exist but are currently Good.";
+        critList.appendChild(li);
+      }
+    }
+  }
 }
 
 function renderOutputs() {
@@ -568,6 +779,7 @@ function renderOutputs() {
   renderCoverageHints();
   renderNodeDetails();
   renderMeshSummary();
+  renderMeshHealthPanel();
 }
 
 function renderAll() {
@@ -656,6 +868,7 @@ function importNodeArchitect(json) {
   const nodes = json.nodes.map((n, idx) => {
     const role = normalizeRole(n.role || "sensor");
     const band = normalizeBand(n.band);
+    const relayCandidate = role === "relay" || (typeof n.weight === "number" && n.weight >= 2);
     return {
       id: n.id || generateId("node"),
       label: n.label || n.id || `Node ${idx + 1}`,
@@ -664,8 +877,11 @@ function importNodeArchitect(json) {
       maxRangeMeters: n.maxRangeMeters || ROLE_DEFAULTS[role]?.baseRange || 200,
       lat: n.lat ?? null,
       lng: n.lng ?? null,
+      elevationMeters: n.elevationMeters ?? n.altitudeMeters,
+      heightAboveGroundMeters: n.heightAboveGroundMeters ?? n.mastHeightMeters,
       source: "nodeArchitect",
-      notes: n.notes
+      notes: n.notes,
+      relayCandidate
     };
   });
   return { nodes };
@@ -687,7 +903,10 @@ function importUxSArchitect(json) {
       lng: n.lng ?? null,
       carriedNodeIds: n.carriedNodeIds || [],
       source: "uxsArchitect",
-      notes: n.notes
+      notes: n.notes,
+      elevationMeters: n.elevationMeters ?? n.altitudeMeters,
+      heightAboveGroundMeters: n.heightAboveGroundMeters ?? n.mastHeightMeters ?? 50,
+      isAirborne: true
     };
   });
   return { nodes };
@@ -707,7 +926,11 @@ function importMeshArchitect(json) {
     lng: node.lng ?? null,
     x: node.x,
     y: node.y,
-    source: node.source || "meshImport"
+    elevationMeters: node.elevationMeters ?? node.altitudeMeters,
+    heightAboveGroundMeters: node.heightAboveGroundMeters ?? node.mastHeightMeters,
+    source: node.source || "meshImport",
+    relayCandidate: node.relayCandidate,
+    isAirborne: node.isAirborne
   }));
   return { nodes, environment: json.environment };
 }
@@ -863,6 +1086,7 @@ function attachImportExport() {
   });
   document.getElementById("restore-btn")?.addEventListener("click", restoreFromLocalStorage);
   document.getElementById("export-kml-btn")?.addEventListener("click", exportMeshToKml);
+  document.getElementById("export-geojson-btn")?.addEventListener("click", exportMeshToGeoJson);
   document.getElementById("export-cot-btn")?.addEventListener("click", exportMeshToCot);
 }
 
@@ -904,13 +1128,13 @@ function exportMeshToKml() {
 
   const linkStyles = `    <Style id="link-good"><LineStyle><color>ff77c33a</color><width>3</width></LineStyle></Style>
     <Style id="link-marginal"><LineStyle><color>ff4ec1f2</color><width>3</width></LineStyle></Style>
-    <Style id="link-fragile"><LineStyle><color>ff3c7ff0</color><width>2</width></LineStyle></Style>`;
+    <Style id="link-unlikely"><LineStyle><color>ff3c7ff0</color><width>2</width></LineStyle></Style>`;
 
   const nodePlacemarks = meshState.nodes
     .map(
       node => `    <Placemark>
       <name>${node.label}</name>
-      <description>${node.role} • ${node.band} GHz • ${node.maxRangeMeters} m</description>
+      <description>${node.role} • ${node.band} GHz • ${node.maxRangeMeters} m${node.elevationMeters ? ` • Elev ${node.elevationMeters} m` : ""}${node.heightAboveGroundMeters ? ` • Height ${node.heightAboveGroundMeters} m AGL` : ""}</description>
       <styleUrl>#${node.role}</styleUrl>
       <Point><coordinates>${node.lng},${node.lat},0</coordinates></Point>
     </Placemark>`
@@ -925,6 +1149,7 @@ function exportMeshToKml() {
       if (!from || !to) return "";
       return `    <Placemark>
       <name>${from.label} -> ${to.label} (${link.quality})</name>
+      <description>Distance ${Math.round(link.distanceMeters)} m • LOS ${link.los}</description>
       <styleUrl>#link-${link.quality}</styleUrl>
       <LineString><coordinates>${from.lng},${from.lat},0 ${to.lng},${to.lat},0</coordinates></LineString>
     </Placemark>`;
@@ -965,6 +1190,55 @@ function exportMeshToCot() {
 ${events}
 </cot>`;
   downloadTextFile(filename, xml, "text/xml");
+}
+
+function exportMeshToGeoJson() {
+  const features = [];
+  meshState.nodes.forEach(node => {
+    if (node.lat == null || node.lng == null) return;
+    features.push({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [node.lng, node.lat, node.heightAboveGroundMeters ?? 0] },
+      properties: {
+        id: node.id,
+        name: node.label,
+        role: node.role,
+        band: node.band,
+        maxRangeMeters: node.maxRangeMeters,
+        elevationMeters: node.elevationMeters,
+        heightAboveGroundMeters: node.heightAboveGroundMeters,
+        source: node.source
+      }
+    });
+  });
+
+  meshState.links.forEach(link => {
+    const from = meshState.nodes.find(n => n.id === link.fromId);
+    const to = meshState.nodes.find(n => n.id === link.toId);
+    if (!from || !to) return;
+    features.push({
+      type: "Feature",
+      geometry: {
+        type: "LineString",
+        coordinates: [
+          [from.lng, from.lat, from.heightAboveGroundMeters ?? 0],
+          [to.lng, to.lat, to.heightAboveGroundMeters ?? 0]
+        ]
+      },
+      properties: {
+        from: from.label,
+        to: to.label,
+        distanceMeters: Math.round(link.distanceMeters),
+        los: link.los,
+        quality: link.quality
+      }
+    });
+  });
+
+  const geo = { type: "FeatureCollection", features };
+  const now = new Date();
+  const filename = `mesh-architect-geojson-${now.toISOString().slice(0, 16).replace(/[:T]/g, "-")}.geojson`;
+  downloadTextFile(filename, JSON.stringify(geo, null, 2), "application/geo+json");
 }
 
 function fitDesignToInputs() {
