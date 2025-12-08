@@ -3,18 +3,24 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Ceradon Mesh Architect v0.1</title>
+  <title>Ceradon Mesh Architect v0.2</title>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-sA+4J6kG+Z0pQ6vTgGs8G9iJTAcE2x8l0zF8aItnxwY="
+    crossorigin=""
+  />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="app-header">
     <div>
-      <h1>Ceradon Mesh Architect v0.1</h1>
-      <p class="subtitle">Multi-node comms planner for controllers, relays, sensors, and UxS.</p>
+      <h1>Ceradon Mesh Architect v0.2 – Map-Based Mesh Planner (Demo)</h1>
+      <p class="subtitle">Leaflet map, draggable nodes, and fast presets for live demos.</p>
     </div>
     <div class="import-export">
       <button id="export-btn">Export current mesh JSON</button>
-      <button id="load-demo-btn">Load demo scenario</button>
+      <button id="reset-btn" title="Clear all nodes and environment">Reset to blank state</button>
     </div>
   </header>
 
@@ -63,6 +69,7 @@
 
       <div class="section">
         <h3>Node / UxS Catalog</h3>
+        <p class="muted">Click a role, then click on the map to place it.</p>
         <div class="button-grid">
           <button data-node-role="controller" class="add-node">Add controller</button>
           <button data-node-role="relay" class="add-node">Add ground relay</button>
@@ -70,18 +77,39 @@
           <button data-node-role="sensor" class="add-node">Add sensor node</button>
           <button data-node-role="client" class="add-node">Add client / handset</button>
         </div>
+        <div id="placement-hint" class="muted"></div>
+      </div>
+
+      <div class="section">
+        <h3>Quick Demo</h3>
+        <label for="preset-select">Preset AO</label>
+        <select id="preset-select">
+          <option value="none">None (blank map)</option>
+        </select>
+        <div class="button-grid">
+          <button id="load-demo-btn">Load demo scenario</button>
+          <button id="restore-btn">Restore last session</button>
+        </div>
       </div>
     </section>
 
     <section class="panel center">
       <h2>Mesh Map / Node Graph</h2>
       <div id="canvas-container">
-        <svg id="mesh-canvas" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid meet"></svg>
+        <div id="mesh-map"></div>
       </div>
     </section>
 
     <section class="panel right">
       <h2>Outputs &amp; Hints</h2>
+
+      <div class="summary-card" id="mesh-summary">
+        <div>
+          <div class="summary-title">Mesh Snapshot</div>
+          <div id="mesh-health">Network is waiting for nodes.</div>
+        </div>
+        <div id="mesh-counts" class="muted"></div>
+      </div>
 
       <div class="section" id="link-summary-section">
         <h3>Link Summary</h3>
@@ -114,11 +142,17 @@
         <div class="button-grid">
           <button id="import-btn">Import</button>
           <button id="download-btn">Download JSON</button>
+          <input type="file" id="file-input" accept="application/json" />
         </div>
       </div>
     </section>
   </main>
 
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-o9N1j7kGQIOzBfrk6TxrXu01mGI38p2GIrShk0pCsYQ="
+    crossorigin=""
+  ></script>
   <script src="sample-data.js"></script>
   <script src="mesh.js"></script>
 </body>
