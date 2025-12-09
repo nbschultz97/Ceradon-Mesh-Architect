@@ -274,6 +274,7 @@
         <div id="map-error" class="error-banner" hidden>
           Leaflet failed to initialize. Refresh or check network access to tiles.
         </div>
+        <div id="tile-warning" class="error-banner" hidden></div>
         <div id="canvas-container">
           <div id="mesh-map"></div>
         </div>
@@ -308,7 +309,7 @@
           <h3>Link Summary</h3>
           <table>
             <thead>
-              <tr><th>From</th><th>To</th><th>Assumed distance (m)</th><th>LOS / NLOS</th><th>Quality</th><th>Notes</th></tr>
+              <tr><th>From</th><th>To</th><th>Assumed distance (m)</th><th>LOS / NLOS</th><th>Quality</th><th>Margin (dB)</th><th>Notes</th></tr>
             </thead>
             <tbody id="link-summary-body"></tbody>
           </table>
@@ -327,6 +328,16 @@
         <div class="section" id="node-detail-section">
           <h3>Node Details</h3>
           <div id="node-detail-content">Select a node to edit its details.</div>
+        </div>
+
+        <div class="section" id="integration-panel">
+          <h3>Integration</h3>
+          <p id="integration-status" class="muted">No MissionProject loaded.</p>
+          <div class="button-grid">
+            <button id="reimport-mission-btn" title="Re-import the last MissionProject JSON">Re-import last MissionProject</button>
+            <label class="file-like" for="integration-mission-file">Load MissionProject JSON…</label>
+            <input type="file" id="integration-mission-file" accept="application/json" />
+          </div>
         </div>
 
         <div class="section">
