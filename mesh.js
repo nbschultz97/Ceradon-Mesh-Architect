@@ -49,11 +49,14 @@ const mapDefaults = {
 };
 
 let map;
+let tileLayer;
+let fallbackLayer;
 let nodeMarkers = {};
 let linkLayers = [];
 let coverageCircle = null;
 let pendingPlacementRole = null;
 let selectedNodeId = null;
+let lastMissionProjectJson = null;
 
 const meshState = {
   environment: {
@@ -81,6 +84,13 @@ function showMapError(message) {
   banner.hidden = false;
 }
 
+function showTileWarning(message) {
+  const banner = document.getElementById("tile-warning");
+  if (!banner) return;
+  banner.textContent = message;
+  banner.hidden = false;
+}
+
 function saveToLocalStorage() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(meshState));
@@ -102,6 +112,7 @@ function restoreFromLocalStorage() {
     meshState.constraints = parsed.constraints || [];
     syncEnvironmentInputs();
     recomputeMesh(false);
+    if (parsed.schema === "MissionProject" || parsed.mission) updateIntegrationStatus(true, meshState.mission?.name);
   } catch (err) {
     console.warn("Failed to restore state", err);
   }
@@ -122,15 +133,37 @@ function initMap() {
   }
   try {
     map = L.map("mesh-map").setView([mapDefaults.center.lat, mapDefaults.center.lng], mapDefaults.zoom);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    tileLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
       attribution: "&copy; OpenStreetMap contributors"
-    }).addTo(map);
+    });
+    tileLayer.on("tileerror", () => handleTileFailure());
+    tileLayer.addTo(map);
     enableMapPlacement();
   } catch (err) {
     console.error(err);
     showMapError("Leaflet failed to initialize. Try refreshing.");
   }
+}
+
+function handleTileFailure() {
+  if (fallbackLayer) return;
+  showTileWarning("Basemap tiles unavailable. Switched to no-basemap mode; markers and links stay online.");
+  if (tileLayer) {
+    try {
+      map?.removeLayer(tileLayer);
+    } catch (e) {
+      console.warn("Failed to remove tile layer", e);
+    }
+  }
+  fallbackLayer = L.gridLayer({ attribution: "Offline basemap" });
+  fallbackLayer.createTile = function () {
+    const tile = document.createElement("div");
+    tile.style.background = "#0c1017";
+    tile.style.opacity = "0.6";
+    return tile;
+  };
+  fallbackLayer.addTo(map);
 }
 
 function wireUI() {
@@ -256,7 +289,8 @@ function addNodeAtLatLng(role, lat, lng) {
     maxRangeMeters: defaultRangeForRole(role),
     lat,
     lng,
-    source: "manual"
+    source: "manual",
+    unplaced: false
   };
   meshState.nodes.push(node);
   renderNodeMarker(node);
@@ -264,16 +298,16 @@ function addNodeAtLatLng(role, lat, lng) {
   saveToLocalStorage();
 }
 
-function markerIcon(role, selected) {
+function markerIcon(role, selected, unplaced = false) {
   return L.divIcon({
-    className: `node-marker node-${role}${selected ? " selected" : ""}`,
+    className: `node-marker node-${role}${selected ? " selected" : ""}${unplaced ? " unplaced" : ""}`,
     iconSize: [18, 18]
   });
 }
 
 function renderNodeMarker(node) {
   if (!map) return;
-  const marker = L.marker([node.lat, node.lng], { draggable: true, icon: markerIcon(node.role, node.id === selectedNodeId) })
+  const marker = L.marker([node.lat, node.lng], { draggable: true, icon: markerIcon(node.role, node.id === selectedNodeId, node.unplaced) })
     .addTo(map)
     .bindPopup(`<strong>${node.label}</strong><br/>${node.role} • ${node.band} GHz`);
 
@@ -282,6 +316,7 @@ function renderNodeMarker(node) {
     const pos = evt.target.getLatLng();
     node.lat = pos.lat;
     node.lng = pos.lng;
+    node.unplaced = false;
     recomputeMesh();
   });
 
@@ -306,7 +341,7 @@ function updateNodeMarkers() {
     const marker = nodeMarkers[node.id];
     if (marker) {
       marker.setLatLng([node.lat, node.lng]);
-      marker.setIcon(markerIcon(node.role, node.id === selectedNodeId));
+      marker.setIcon(markerIcon(node.role, node.id === selectedNodeId, node.unplaced));
     } else {
       renderNodeMarker(node);
     }
@@ -350,7 +385,7 @@ function effectiveRange(node) {
   return node.maxRangeMeters * bandFactor * terrain * ew;
 }
 
-function estimateLinkQuality(a, b, distanceMeters, losType) {
+function estimateLinkMetrics(a, b, distanceMeters, losType) {
   const freq = Number(a.band) || Number(b.band) || Number(meshState.environment.primaryBand) || 2.4;
   const freqMHz = freq * 1000;
   const penalty = LOS_PENALTY_DB[losType] ?? LOS_PENALTY_DB[defaultLosForTerrain(meshState.environment.terrain)];
@@ -358,9 +393,10 @@ function estimateLinkQuality(a, b, distanceMeters, losType) {
   const lossAtRange = freeSpacePathLoss(effectiveRangeMeters, freqMHz);
   const lossAtDistance = freeSpacePathLoss(distanceMeters, freqMHz) + penalty;
   const marginDb = lossAtRange - lossAtDistance;
-  if (marginDb >= 8) return "good";
-  if (marginDb >= -6) return "marginal";
-  return "unlikely";
+  let quality = "unlikely";
+  if (marginDb >= 8) quality = "good";
+  else if (marginDb >= -6) quality = "marginal";
+  return { quality, marginDb };
 }
 
 function linkKey(a, b) {
@@ -382,7 +418,7 @@ function recomputeLinks() {
       const elevationA = (a.elevationMeters ?? a.altitudeMeters ?? 0) + (a.heightAboveGroundMeters ?? 0);
       const elevationB = (b.elevationMeters ?? b.altitudeMeters ?? 0) + (b.heightAboveGroundMeters ?? 0);
       const losHint = losEstimateFromHeights(measuredDistance, elevationA, elevationB);
-      const quality = estimateLinkQuality(a, b, distanceMeters, losType);
+      const { quality, marginDb } = estimateLinkMetrics(a, b, distanceMeters, losType);
 
       links.push({
         fromId: a.id,
@@ -392,7 +428,8 @@ function recomputeLinks() {
         distanceOverrideMeters: prior.distanceOverrideMeters,
         los: losType,
         losEstimate: losHint,
-        quality
+        quality,
+        linkMarginDb: marginDb
       });
     }
   }
@@ -406,7 +443,7 @@ function renderLinks() {
     const from = meshState.nodes.find(n => n.id === link.fromId);
     const to = meshState.nodes.find(n => n.id === link.toId);
     if (!from || !to || !map) return;
-    const color = link.quality === "good" ? "#3ac177" : link.quality === "marginal" ? "#f2c14e" : "#f07f3c";
+    const color = link.linkMarginDb >= 10 ? "#3ac177" : link.linkMarginDb >= 2 ? "#f2c14e" : "#f07f3c";
     const weight = link.quality === "unlikely" ? 2 : 3;
     const dashArray = link.quality === "unlikely" ? "6,4" : undefined;
     const poly = L.polyline(
@@ -415,7 +452,9 @@ function renderLinks() {
         [to.lat, to.lng]
       ],
       { color, weight, opacity: 0.85, dashArray }
-    ).addTo(map);
+    )
+      .addTo(map)
+      .bindTooltip(`${Math.round(link.linkMarginDb || 0)} dB`, { permanent: false, direction: "center", className: "link-tooltip" });
     linkLayers.push(poly);
   });
 }
@@ -490,6 +529,7 @@ function renderLinkSummary() {
       distanceInput,
       losSelect,
       link.quality,
+      Math.round(link.linkMarginDb || 0),
       losHint
     ];
     cells.forEach((value, idx) => {
@@ -653,7 +693,7 @@ function focusNode(nodeId) {
   selectedNodeId = nodeId;
   Object.entries(nodeMarkers).forEach(([id, marker]) => {
     const node = meshState.nodes.find(n => n.id === id);
-    marker.setIcon(markerIcon(node?.role || "client", id === selectedNodeId));
+    marker.setIcon(markerIcon(node?.role || "client", id === selectedNodeId, node?.unplaced));
   });
   renderNodeDetails();
 }
@@ -857,8 +897,10 @@ function buildMissionProjectPayload() {
     to_id: link.toId,
     distance_m: Math.round(link.distanceOverrideMeters || link.distanceMeters || 0),
     los: link.los,
-    quality: link.quality,
-    assumed_band: meshState.environment.primaryBand,
+    estimated_link_quality: link.quality,
+    link_margin_db: Math.round(link.linkMarginDb ?? 0),
+    band: meshState.environment.primaryBand,
+    environment_tag: `${meshState.environment.terrain || "unknown"}-${meshState.environment.ewLevel || "EW"}`,
     origin_tool: link.origin_tool || "mesh"
   }));
 
@@ -911,6 +953,13 @@ function setImportStatus(message, tone = "muted") {
       banner.hidden = true;
     }
   }
+}
+
+function updateIntegrationStatus(loaded, name) {
+  const status = document.getElementById("integration-status");
+  if (!status) return;
+  status.textContent = loaded ? `MissionProject loaded: ${name || "Unnamed project"}` : "No MissionProject loaded.";
+  status.classList.toggle("muted", !loaded);
 }
 
 function normalizeRole(role) {
@@ -1054,8 +1103,9 @@ function importMissionProject(json) {
     distanceMeters: l.distance_m,
     distanceOverrideMeters: l.distance_m,
     los: l.los || "LOS",
-    quality: l.quality || "none",
-    assumedBand: l.assumed_band || json.environment?.primary_band,
+    quality: l.estimated_link_quality || l.quality || "none",
+    linkMarginDb: l.link_margin_db,
+    assumedBand: l.assumed_band || l.band || json.environment?.primary_band,
     origin_tool: l.origin_tool || json.origin_tool || "mesh"
   }));
 
@@ -1080,7 +1130,7 @@ function importMissionProject(json) {
   };
 }
 
-function applyImportResult(result, mode = "replace") {
+function applyImportResult(result, mode = "replace", sourceType = "unknown") {
   const nodes = (result.nodes || []).map(ensureLatLng);
   const environment = result.environment;
   const links = result.links || [];
@@ -1105,19 +1155,21 @@ function applyImportResult(result, mode = "replace") {
   recomputeMesh();
   fitMapToNodes();
   setImportStatus(mode === "append" ? "Imported and appended nodes." : "Imported mesh successfully.");
+  if (sourceType === "mission") updateIntegrationStatus(true, mission?.name || meshState.mission?.name);
 }
 
 function handleParsedImport(parsed) {
   const mode = getImportMode();
   try {
     if (parsed.source === "NodeArchitect") {
-      applyImportResult(importNodeArchitect(parsed), mode);
+      applyImportResult(importNodeArchitect(parsed), mode, "node");
     } else if (parsed.source === "UxSArchitect") {
-      applyImportResult(importUxSArchitect(parsed), mode);
+      applyImportResult(importUxSArchitect(parsed), mode, "uxs");
     } else if (parsed.schema === "MissionProject") {
-      applyImportResult(importMissionProject(parsed), mode);
+      lastMissionProjectJson = parsed;
+      applyImportResult(importMissionProject(parsed), mode, "mission");
     } else if (parsed.meshVersion || parsed.environment || parsed.nodes) {
-      applyImportResult(importMeshArchitect(parsed), mode);
+      applyImportResult(importMeshArchitect(parsed), mode, "mesh");
     } else {
       throw new Error("Unsupported JSON payload. Provide MissionProject, Node, UxS, or Mesh Architect JSON.");
     }
@@ -1146,7 +1198,8 @@ function handleFileImport(event, importer) {
     try {
       const parsed = JSON.parse(e.target.result || "");
       if (importer) {
-        applyImportResult(importer(parsed), getImportMode());
+        if (importer === importMissionProject) lastMissionProjectJson = parsed;
+        applyImportResult(importer(parsed), getImportMode(), importer === importMissionProject ? "mission" : "file");
       } else {
         handleParsedImport(parsed);
       }
@@ -1176,6 +1229,7 @@ function layoutNodes(nodes) {
     const offset = (grid - 1) / 2;
     node.lat = center.lat + (row - offset) * spacing;
     node.lng = center.lng + (col - offset) * spacing;
+    node.unplaced = true;
   });
 }
 
@@ -1186,15 +1240,15 @@ function ensureLatLng(node) {
     if (bounds) {
       const lat = bounds.getSouth() + (node.y ?? 0.5) * (bounds.getNorth() - bounds.getSouth());
       const lng = bounds.getWest() + (node.x ?? 0.5) * (bounds.getEast() - bounds.getWest());
-      return { ...node, lat, lng };
+      return { ...node, lat, lng, unplaced: true };
     }
     const center = mapDefaults.center;
     const span = 0.002;
     const mappedLat = center.lat + ((node.y ?? 0.5) - 0.5) * span;
     const mappedLng = center.lng + ((node.x ?? 0.5) - 0.5) * span;
-    return { ...node, lat: mappedLat, lng: mappedLng };
+    return { ...node, lat: mappedLat, lng: mappedLng, unplaced: true };
   }
-  return { ...node, lat: null, lng: null };
+  return { ...node, lat: null, lng: null, unplaced: true };
 }
 
 function loadDemo() {
@@ -1245,6 +1299,14 @@ function attachImportExport() {
   document.getElementById("node-file-input")?.addEventListener("change", e => handleFileImport(e, importNodeArchitect));
   document.getElementById("uxs-file-input")?.addEventListener("change", e => handleFileImport(e, importUxSArchitect));
   document.getElementById("mesh-file-input")?.addEventListener("change", e => handleFileImport(e, importMeshArchitect));
+  document.getElementById("integration-mission-file")?.addEventListener("change", e => handleFileImport(e, importMissionProject));
+  document.getElementById("reimport-mission-btn")?.addEventListener("click", () => {
+    if (lastMissionProjectJson) {
+      applyImportResult(importMissionProject(lastMissionProjectJson), getImportMode(), "mission");
+    } else {
+      setImportStatus("No MissionProject cached. Load a file first.", "error");
+    }
+  });
   document.getElementById("reset-btn")?.addEventListener("click", () => {
     meshState.nodes = [];
     selectedNodeId = null;
@@ -1355,6 +1417,14 @@ function exportMeshToCot() {
       lon: node.lng,
       hae: (node.elevationMeters || 0) + (node.heightAboveGroundMeters || 0),
       remarks: `${node.maxRangeMeters || ROLE_DEFAULTS[node.role]?.baseRange || 0} m range`
+    })),
+    links: meshState.links.map(link => ({
+      from_id: link.fromId,
+      to_id: link.toId,
+      quality: link.quality,
+      link_margin_db: Math.round(link.linkMarginDb || 0),
+      band: meshState.environment.primaryBand,
+      environment_tag: `${meshState.environment.terrain || "unknown"}-${meshState.environment.ewLevel || "EW"}`
     }))
   };
 
@@ -1377,6 +1447,8 @@ function exportMeshToGeoJson() {
         name: node.label,
         role: node.role,
         band: node.band,
+        estimated_link_quality: "n/a",
+        environment_tag: `${meshState.environment.terrain || "unknown"}-${meshState.environment.ewLevel || "EW"}`,
         maxRangeMeters: node.maxRangeMeters,
         elevationMeters: node.elevationMeters,
         heightAboveGroundMeters: node.heightAboveGroundMeters,
@@ -1401,12 +1473,15 @@ function exportMeshToGeoJson() {
         ]
       },
       properties: {
+        id: link.id || `${link.fromId}-${link.toId}`,
         from: from.label,
         to: to.label,
+        band: meshState.environment.primaryBand,
         distanceMeters: Math.round(link.distanceMeters),
         los: link.los,
-        quality: link.quality,
-        assumed_band: meshState.environment.primaryBand
+        estimated_link_quality: link.quality,
+        link_margin_db: Math.round(link.linkMarginDb || 0),
+        environment_tag: `${meshState.environment.terrain || "unknown"}-${meshState.environment.ewLevel || "EW"}`
       }
     });
   });
@@ -1425,6 +1500,7 @@ function init() {
   initMap();
   wireUI();
   initDemoBanner();
+  updateIntegrationStatus(false);
   fitDesignToInputs();
   restoreFromLocalStorage();
   layoutNodes(meshState.nodes);
