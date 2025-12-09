@@ -51,6 +51,8 @@ const mapDefaults = {
 let map;
 let tileLayer;
 let fallbackLayer;
+let useFallbackCanvas = false;
+let fallbackBounds = null;
 let nodeMarkers = {};
 let linkLayers = [];
 let coverageCircle = null;
@@ -73,11 +75,12 @@ const meshState = {
   },
   nodes: [],
   links: [],
+  meshLinks: [],
   kits: [],
   constraints: []
 };
 
-function showMapError(message) {
+function showMapError(message = "Basemap unavailable. Switched to simplified offline view.") {
   const banner = document.getElementById("map-error");
   if (!banner) return;
   banner.textContent = message;
@@ -89,6 +92,212 @@ function showTileWarning(message) {
   if (!banner) return;
   banner.textContent = message;
   banner.hidden = false;
+}
+
+function activateFallbackCanvas(reason) {
+  useFallbackCanvas = true;
+  showMapError(reason || "Basemap unavailable. Using simplified offline view.");
+  const mapEl = document.getElementById("mesh-map");
+  const canvas = document.getElementById("fallback-canvas");
+  if (mapEl) mapEl.style.display = "none";
+  if (canvas) {
+    canvas.hidden = false;
+    initFallbackCanvas(canvas);
+  }
+}
+
+function initFallbackCanvas(canvas) {
+  if (!canvas) return;
+  const container = document.getElementById("canvas-container");
+  const resizeCanvas = () => {
+    canvas.width = container?.clientWidth || 600;
+    canvas.height = Math.max(container?.clientHeight || 0, 420);
+    renderCanvasGraph();
+  };
+
+  let draggingNodeId = null;
+
+  const toPoint = evt => {
+    const rect = canvas.getBoundingClientRect();
+    return { x: evt.clientX - rect.left, y: evt.clientY - rect.top };
+  };
+
+  canvas.addEventListener("click", evt => {
+    const point = toPoint(evt);
+    if (pendingPlacementRole) {
+      const latlng = pointToLatLng(point.x, point.y);
+      addNodeAtLatLng(pendingPlacementRole, latlng.lat, latlng.lng);
+      setPendingPlacement(null);
+      renderCanvasGraph();
+      return;
+    }
+    const nearest = findNearestNode(point.x, point.y);
+    if (nearest) {
+      focusNode(nearest.id);
+      renderCanvasGraph();
+    }
+  });
+
+  canvas.addEventListener("mousedown", evt => {
+    const point = toPoint(evt);
+    const nearest = findNearestNode(point.x, point.y);
+    if (nearest && nearest.distance < 16) {
+      draggingNodeId = nearest.id;
+    }
+  });
+
+  canvas.addEventListener("mousemove", evt => {
+    if (!draggingNodeId) return;
+    const node = meshState.nodes.find(n => n.id === draggingNodeId);
+    if (!node) return;
+    const point = toPoint(evt);
+    const latlng = pointToLatLng(point.x, point.y);
+    node.lat = latlng.lat;
+    node.lng = latlng.lng;
+    node.unplaced = false;
+    renderCanvasGraph();
+  });
+
+  canvas.addEventListener("mouseup", () => {
+    if (draggingNodeId) {
+      draggingNodeId = null;
+      recomputeMesh();
+    }
+  });
+
+  window.addEventListener("resize", resizeCanvas);
+  resizeCanvas();
+}
+
+function computeFallbackBounds() {
+  if (!meshState.nodes.length) {
+    const center = map?.getCenter?.() || mapDefaults.center;
+    const span = 0.003;
+    return { minLat: center.lat - span, maxLat: center.lat + span, minLng: center.lng - span, maxLng: center.lng + span };
+  }
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLng = Infinity;
+  let maxLng = -Infinity;
+  meshState.nodes.forEach(n => {
+    minLat = Math.min(minLat, n.lat ?? 0);
+    maxLat = Math.max(maxLat, n.lat ?? 0);
+    minLng = Math.min(minLng, n.lng ?? 0);
+    maxLng = Math.max(maxLng, n.lng ?? 0);
+  });
+  if (minLat === maxLat) {
+    minLat -= 0.0008;
+    maxLat += 0.0008;
+  }
+  if (minLng === maxLng) {
+    minLng -= 0.0008;
+    maxLng += 0.0008;
+  }
+  return { minLat, maxLat, minLng, maxLng };
+}
+
+function latLngToPoint(lat, lng) {
+  fallbackBounds = fallbackBounds || computeFallbackBounds();
+  const { minLat, maxLat, minLng, maxLng } = fallbackBounds;
+  const width = document.getElementById("fallback-canvas")?.width || 1;
+  const height = document.getElementById("fallback-canvas")?.height || 1;
+  const x = ((lng - minLng) / (maxLng - minLng)) * width;
+  const y = height - ((lat - minLat) / (maxLat - minLat)) * height;
+  return { x, y };
+}
+
+function pointToLatLng(x, y) {
+  fallbackBounds = fallbackBounds || computeFallbackBounds();
+  const { minLat, maxLat, minLng, maxLng } = fallbackBounds;
+  const canvas = document.getElementById("fallback-canvas");
+  const width = canvas?.width || 1;
+  const height = canvas?.height || 1;
+  const lng = minLng + (x / width) * (maxLng - minLng);
+  const lat = minLat + (1 - y / height) * (maxLat - minLat);
+  return { lat, lng };
+}
+
+function findNearestNode(x, y) {
+  let nearest = null;
+  let best = Infinity;
+  meshState.nodes.forEach(n => {
+    if (n.lat == null || n.lng == null) return;
+    const pt = latLngToPoint(n.lat, n.lng);
+    const dist = Math.hypot(pt.x - x, pt.y - y);
+    if (dist < best) {
+      best = dist;
+      nearest = { id: n.id, distance: dist };
+    }
+  });
+  return nearest;
+}
+
+function renderCanvasGraph() {
+  if (!useFallbackCanvas) return;
+  const canvas = document.getElementById("fallback-canvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  fallbackBounds = computeFallbackBounds();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = "#0c1017";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.strokeStyle = "#1f2a36";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = (canvas.height / 4) * i;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(canvas.width, y);
+    ctx.stroke();
+  }
+
+  meshState.links.forEach(link => {
+    const from = meshState.nodes.find(n => n.id === link.fromId);
+    const to = meshState.nodes.find(n => n.id === link.toId);
+    if (!from || !to) return;
+    const a = latLngToPoint(from.lat, from.lng);
+    const b = latLngToPoint(to.lat, to.lng);
+    const color = link.linkMarginDb >= 10 ? "#3ac177" : link.linkMarginDb >= 2 ? "#f2c14e" : "#f07f3c";
+    ctx.strokeStyle = color;
+    ctx.lineWidth = link.quality === "unlikely" ? 2 : 3;
+    ctx.setLineDash(link.quality === "unlikely" ? [6, 4] : []);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  });
+
+  const controller = meshState.nodes.find(n => n.role === "controller");
+  if (controller) {
+    const centerPt = latLngToPoint(controller.lat, controller.lng);
+    const meterToDeg = 1 / 111000;
+    const radiusLat = meshState.environment.designRadiusMeters * meterToDeg;
+    const edge = latLngToPoint(controller.lat + radiusLat, controller.lng);
+    const radiusPx = Math.abs(edge.y - centerPt.y);
+    ctx.strokeStyle = "#888";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.arc(centerPt.x, centerPt.y, radiusPx, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  meshState.nodes.forEach(node => {
+    if (node.lat == null || node.lng == null) return;
+    const { x, y } = latLngToPoint(node.lat, node.lng);
+    ctx.fillStyle = node.id === selectedNodeId ? "#ffffff" : ROLE_DEFAULTS[node.role]?.color || "#b7b7b7";
+    ctx.beginPath();
+    ctx.arc(x, y, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.font = "12px system-ui";
+    ctx.fillStyle = "#d8d8db";
+    ctx.textAlign = "center";
+    ctx.fillText(node.label, x, y - 12);
+  });
 }
 
 function saveToLocalStorage() {
@@ -108,6 +317,7 @@ function restoreFromLocalStorage() {
     Object.assign(meshState.environment, parsed.environment || {});
     if (parsed.mission) meshState.mission = { ...meshState.mission, ...parsed.mission };
     meshState.nodes = (parsed.nodes || []).map(ensureLatLng);
+    meshState.meshLinks = parsed.meshLinks || [];
     meshState.kits = parsed.kits || [];
     meshState.constraints = parsed.constraints || [];
     syncEnvironmentInputs();
@@ -128,7 +338,7 @@ function toggleRestoreVisibility() {
 function initMap() {
   const mapEl = document.getElementById("mesh-map");
   if (!mapEl || !window.L) {
-    showMapError("Map container missing or Leaflet unavailable.");
+    activateFallbackCanvas("Basemap unavailable. Using simplified offline view.");
     return;
   }
   try {
@@ -142,28 +352,14 @@ function initMap() {
     enableMapPlacement();
   } catch (err) {
     console.error(err);
-    showMapError("Leaflet failed to initialize. Try refreshing.");
+    activateFallbackCanvas("Basemap unavailable. Using simplified offline view.");
   }
 }
 
 function handleTileFailure() {
-  if (fallbackLayer) return;
-  showTileWarning("Basemap tiles unavailable. Switched to no-basemap mode; markers and links stay online.");
-  if (tileLayer) {
-    try {
-      map?.removeLayer(tileLayer);
-    } catch (e) {
-      console.warn("Failed to remove tile layer", e);
-    }
-  }
-  fallbackLayer = L.gridLayer({ attribution: "Offline basemap" });
-  fallbackLayer.createTile = function () {
-    const tile = document.createElement("div");
-    tile.style.background = "#0c1017";
-    tile.style.opacity = "0.6";
-    return tile;
-  };
-  fallbackLayer.addTo(map);
+  if (useFallbackCanvas) return;
+  showTileWarning("Basemap unavailable. Using simplified offline view.");
+  activateFallbackCanvas();
 }
 
 function wireUI() {
@@ -306,7 +502,7 @@ function markerIcon(role, selected, unplaced = false) {
 }
 
 function renderNodeMarker(node) {
-  if (!map) return;
+  if (!map || useFallbackCanvas) return;
   const marker = L.marker([node.lat, node.lng], { draggable: true, icon: markerIcon(node.role, node.id === selectedNodeId, node.unplaced) })
     .addTo(map)
     .bindPopup(`<strong>${node.label}</strong><br/>${node.role} • ${node.band} GHz`);
@@ -329,6 +525,7 @@ function clearMarkers() {
 }
 
 function updateNodeMarkers() {
+  if (useFallbackCanvas) return;
   const existingIds = new Set(meshState.nodes.map(n => n.id));
   Object.keys(nodeMarkers).forEach(id => {
     if (!existingIds.has(id)) {
@@ -436,7 +633,29 @@ function recomputeLinks() {
   meshState.links = links;
 }
 
+function meshQualityLabel(quality) {
+  if (quality === "unlikely") return "poor";
+  return quality || "unknown";
+}
+
+function syncMeshLinksFromState() {
+  const envTag = `${meshState.environment.terrain || "unknown"}-${meshState.environment.ewLevel || "EW"}`;
+  meshState.meshLinks = meshState.links.map(link => ({
+    id: link.id || `${link.fromId}-${link.toId}`,
+    from_id: link.fromId,
+    to_id: link.toId,
+    band: meshState.environment.primaryBand,
+    estimated_range: Math.round(link.distanceOverrideMeters || link.distanceMeters || 0),
+    estimated_link_quality: meshQualityLabel(link.quality),
+    estimated_link_quality_label: meshQualityLabel(link.quality),
+    environment_tag: envTag,
+    link_margin_db: Math.round(link.linkMarginDb || 0),
+    distance_m: Math.round(link.distanceOverrideMeters || link.distanceMeters || 0)
+  }));
+}
+
 function renderLinks() {
+  if (useFallbackCanvas) return;
   linkLayers.forEach(line => line.remove());
   linkLayers = [];
   meshState.links.forEach(link => {
@@ -460,7 +679,7 @@ function renderLinks() {
 }
 
 function updateCoverageCircle() {
-  if (!map) return;
+  if (!map || useFallbackCanvas) return;
   if (coverageCircle) {
     map.removeLayer(coverageCircle);
     coverageCircle = null;
@@ -701,6 +920,7 @@ function focusNode(nodeId) {
 function renderMeshSummary() {
   const summaryText = document.getElementById("mesh-health");
   const counts = document.getElementById("mesh-counts");
+  const linkMicro = document.getElementById("mesh-link-micro-summary");
   const totals = meshState.nodes.reduce((acc, node) => {
     acc[node.role] = (acc[node.role] || 0) + 1;
     return acc;
@@ -719,6 +939,24 @@ function renderMeshSummary() {
     summaryText.textContent = meshState.nodes.length ? `Network is ${health} under current assumptions.` : "Network is waiting for nodes.";
   if (counts)
     counts.textContent = `Nodes ${meshState.nodes.length} (Ctrl ${totals.controller || 0} • Relays ${totals.relay || 0} • UxS ${totals.uxs || 0} • Sensors ${totals.sensor || 0} • Clients ${totals.client || 0}) | Links ${meshState.links.length} (Good ${qualityCounts.good} • Marginal ${qualityCounts.marginal} • Unlikely ${qualityCounts.unlikely})`;
+  if (linkMicro) {
+    linkMicro.innerHTML = "";
+    const meshLinks = meshState.meshLinks?.length ? meshState.meshLinks : meshState.links;
+    meshLinks.slice(0, 6).forEach(link => {
+      const li = document.createElement("li");
+      const from = meshState.nodes.find(n => n.id === (link.from_id || link.fromId));
+      const to = meshState.nodes.find(n => n.id === (link.to_id || link.toId));
+      const distance = Math.round(link.distance_m || link.distanceMeters || link.estimated_range || 0);
+      const label = meshQualityLabel(link.estimated_link_quality || link.quality);
+      li.textContent = `${from?.label || link.from_id || link.fromId} → ${to?.label || link.to_id || link.toId}: ${distance} m • ${label}`;
+      linkMicro.appendChild(li);
+    });
+    if (!linkMicro.children.length) {
+      const li = document.createElement("li");
+      li.textContent = "Links will appear once nodes are placed.";
+      linkMicro.appendChild(li);
+    }
+  }
 }
 
 function analyzeMeshRobustness() {
@@ -833,14 +1071,19 @@ function renderOutputs() {
 }
 
 function renderAll() {
-  updateNodeMarkers();
-  renderLinks();
-  updateCoverageCircle();
+  if (useFallbackCanvas) {
+    renderCanvasGraph();
+  } else {
+    updateNodeMarkers();
+    renderLinks();
+    updateCoverageCircle();
+  }
   renderOutputs();
 }
 
 function recomputeMesh(save = true) {
   recomputeLinks();
+  syncMeshLinksFromState();
   renderAll();
   if (save) saveToLocalStorage();
 }
@@ -891,18 +1134,20 @@ function buildMissionProjectPayload() {
       carried_node_ids: p.carriedNodeIds || []
     }));
 
-  const links = meshState.links.map(link => ({
+  const links = (meshState.meshLinks?.length ? meshState.meshLinks : meshState.links.map(link => ({
     id: link.id || `${link.fromId}-${link.toId}`,
     from_id: link.fromId,
     to_id: link.toId,
     distance_m: Math.round(link.distanceOverrideMeters || link.distanceMeters || 0),
     los: link.los,
-    estimated_link_quality: link.quality,
+    estimated_link_quality: meshQualityLabel(link.quality),
+    estimated_link_quality_label: meshQualityLabel(link.quality),
     link_margin_db: Math.round(link.linkMarginDb ?? 0),
+    estimated_range: Math.round(link.distanceOverrideMeters || link.distanceMeters || 0),
     band: meshState.environment.primaryBand,
     environment_tag: `${meshState.environment.terrain || "unknown"}-${meshState.environment.ewLevel || "EW"}`,
     origin_tool: link.origin_tool || "mesh"
-  }));
+  })));
 
   return {
     schema: "MissionProject",
@@ -1109,6 +1354,18 @@ function importMissionProject(json) {
     origin_tool: l.origin_tool || json.origin_tool || "mesh"
   }));
 
+  const meshLinks = (json.mesh_links || []).map(l => ({
+    id: l.id || `${l.from_id || ""}-${l.to_id || ""}`,
+    from_id: l.from_id,
+    to_id: l.to_id,
+    band: l.band || json.environment?.primary_band,
+    estimated_range: l.estimated_range || l.distance_m,
+    estimated_link_quality: l.estimated_link_quality || l.quality || "unknown",
+    estimated_link_quality_label: l.estimated_link_quality_label || l.quality || "unknown",
+    environment_tag: l.environment_tag,
+    link_margin_db: l.link_margin_db
+  }));
+
   const environment = {
     terrain: json.environment?.terrain || json.environment?.terrainType || meshState.environment.terrain,
     ewLevel: json.environment?.ew_level || json.environment?.ewLevel || meshState.environment.ewLevel,
@@ -1124,6 +1381,7 @@ function importMissionProject(json) {
     nodes: nodes.concat(platformNodes),
     environment,
     links,
+    meshLinks,
     mission: json.mission || meshState.mission,
     kits: json.kits || [],
     constraints: json.constraints || []
@@ -1134,6 +1392,7 @@ function applyImportResult(result, mode = "replace", sourceType = "unknown") {
   const nodes = (result.nodes || []).map(ensureLatLng);
   const environment = result.environment;
   const links = result.links || [];
+  const meshLinks = result.meshLinks || [];
   const mission = result.mission;
   const kits = result.kits;
   const constraints = result.constraints;
@@ -1143,6 +1402,7 @@ function applyImportResult(result, mode = "replace", sourceType = "unknown") {
     meshState.nodes = nodes;
   }
   meshState.links = links;
+  meshState.meshLinks = meshLinks;
   if (environment) {
     meshState.environment = { ...meshState.environment, ...environment };
     syncEnvironmentInputs();
@@ -1187,6 +1447,21 @@ function handleImport() {
     handleParsedImport(parsed);
   } catch (err) {
     setImportStatus("Invalid JSON provided. Please verify the format.", "error");
+  }
+}
+
+function handleMissionImport() {
+  const text = document.getElementById("json-area")?.value || "";
+  if (!text.trim()) return setImportStatus("Paste MissionProject JSON to import.", "error");
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed.schema !== "MissionProject") {
+      throw new Error("Expected MissionProject JSON with schema set.");
+    }
+    lastMissionProjectJson = parsed;
+    applyImportResult(importMissionProject(parsed), getImportMode(), "mission");
+  } catch (err) {
+    setImportStatus(err.message || "Invalid MissionProject JSON provided.", "error");
   }
 }
 
@@ -1256,25 +1531,37 @@ function loadDemo() {
   const selected = presetSelect?.value;
   const scenario = presetScenarios.find(s => s.id === selected);
   if (!scenario) {
-    meshState.nodes = [];
+    const center = map?.getCenter?.() || mapDefaults.center;
+    meshState.environment = {
+      ...meshState.environment,
+      terrain: "Suburban",
+      ewLevel: "Medium",
+      primaryBand: "2.4",
+      designRadiusMeters: 360,
+      targetReliability: 80
+    };
+    meshState.nodes = [
+      { id: generateId("base"), label: "Base Node", role: "controller", band: "2.4", maxRangeMeters: 420, lat: center.lat, lng: center.lng },
+      { id: generateId("relay"), label: "Relay", role: "relay", band: "2.4", maxRangeMeters: 360, lat: center.lat + 0.0006, lng: center.lng + 0.0009 },
+      { id: generateId("forward"), label: "Forward Node", role: "client", band: "2.4", maxRangeMeters: 260, lat: center.lat - 0.0005, lng: center.lng + 0.0006 },
+      { id: generateId("sensor"), label: "Sensor", role: "sensor", band: "2.4", maxRangeMeters: 260, lat: center.lat + 0.0004, lng: center.lng - 0.0007 }
+    ];
+    meshState.mission = { ...meshState.mission, name: "Demo mesh scenario", project_code: "DEMO-GENERIC", origin_tool: "demo" };
     meshState.constraints = [];
     meshState.kits = [];
-    meshState.mission = { ...meshState.mission, name: "Mesh Architect Plan", project_code: "MESH-GHOST-347" };
-    selectedNodeId = null;
-    recomputeMesh();
-    return;
+  } else {
+    meshState.environment = { ...meshState.environment, ...scenario.environment };
+    meshState.constraints = scenario.constraints || [];
+    meshState.kits = scenario.kits || [];
+    meshState.mission = {
+      name: scenario.label,
+      project_code: scenario.id?.toUpperCase?.() || "DEMO",
+      origin_tool: "demo"
+    };
+    meshState.nodes = scenario.nodes.map(n => ({ ...n, source: "demo", origin_tool: "mesh" }));
   }
-  meshState.environment = { ...meshState.environment, ...scenario.environment };
-  meshState.constraints = scenario.constraints || [];
-  meshState.kits = scenario.kits || [];
-  meshState.mission = {
-    name: scenario.label,
-    project_code: scenario.id?.toUpperCase?.() || "DEMO",
-    origin_tool: "demo"
-  };
-  meshState.nodes = scenario.nodes.map(n => ({ ...n, source: "demo", origin_tool: "mesh" }));
   syncEnvironmentInputs();
-  if (map && scenario.environment.center) {
+  if (map && scenario?.environment?.center) {
     map.setView([scenario.environment.center.lat, scenario.environment.center.lng], scenario.environment.center.zoom || mapDefaults.zoom);
   }
   layoutNodes(meshState.nodes);
@@ -1294,6 +1581,8 @@ function attachImportExport() {
   document.getElementById("export-btn")?.addEventListener("click", exportMeshToText);
   document.getElementById("download-btn")?.addEventListener("click", downloadJson);
   document.getElementById("import-btn")?.addEventListener("click", handleImport);
+  document.getElementById("import-mission-btn")?.addEventListener("click", handleMissionImport);
+  document.getElementById("panel-export-mission-btn")?.addEventListener("click", downloadJson);
   document.getElementById("load-demo-btn")?.addEventListener("click", loadDemo);
   document.getElementById("mission-file-input")?.addEventListener("change", e => handleFileImport(e, importMissionProject));
   document.getElementById("node-file-input")?.addEventListener("change", e => handleFileImport(e, importNodeArchitect));
@@ -1479,7 +1768,7 @@ function exportMeshToGeoJson() {
         band: meshState.environment.primaryBand,
         distanceMeters: Math.round(link.distanceMeters),
         los: link.los,
-        estimated_link_quality: link.quality,
+        estimated_link_quality: meshQualityLabel(link.quality),
         link_margin_db: Math.round(link.linkMarginDb || 0),
         environment_tag: `${meshState.environment.terrain || "unknown"}-${meshState.environment.ewLevel || "EW"}`
       }
