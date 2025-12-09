@@ -156,7 +156,7 @@
 </head>
 <body>
   <div id="access-gate">
-    <h1>Ceradon Systems — Ceradon Mesh Architect Demo</h1>
+    <h1>Ceradon Mesh Architect — part of the Ceradon Architect COTS planning suite</h1>
     <p>Enter your demo access code to continue.</p>
     <label for="demo-code">Access code</label>
     <input id="demo-code" type="password" autocomplete="off" />
@@ -271,12 +271,11 @@
         <div id="map-helper" class="muted">
           Terrain + EW sliders reflect why LOS is rarely guaranteed. Drag nodes to see which links hold up under interference.
         </div>
-        <div id="map-error" class="error-banner" hidden>
-          Leaflet failed to initialize. Refresh or check network access to tiles.
-        </div>
+        <div id="map-error" class="error-banner" hidden></div>
         <div id="tile-warning" class="error-banner" hidden></div>
         <div id="canvas-container">
           <div id="mesh-map"></div>
+          <canvas id="fallback-canvas" hidden></canvas>
         </div>
       </section>
 
@@ -289,6 +288,7 @@
             <div id="mesh-health">Network is waiting for nodes.</div>
           </div>
           <div id="mesh-counts" class="muted"></div>
+          <ul id="mesh-link-micro-summary" class="muted"></ul>
         </div>
 
         <div class="section" id="mesh-health-section">
@@ -353,7 +353,9 @@
           <textarea id="json-area" placeholder="Paste MissionProject / Node / UxS / Mesh JSON here"></textarea>
           <div class="button-grid">
             <button id="import-btn">Import from text</button>
+            <button id="import-mission-btn">Import MissionProject JSON</button>
             <button id="download-btn">Download MissionProject JSON</button>
+            <button id="panel-export-mission-btn">Export MissionProject JSON</button>
           </div>
 
           <div class="import-files">
