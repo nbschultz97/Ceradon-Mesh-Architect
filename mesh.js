@@ -53,6 +53,7 @@ let tileLayer;
 let fallbackLayer;
 let useFallbackCanvas = false;
 let fallbackBounds = null;
+let tileFallbackTried = false;
 let nodeMarkers = {};
 let linkLayers = [];
 let coverageCircle = null;
@@ -77,7 +78,11 @@ const meshState = {
   links: [],
   meshLinks: [],
   kits: [],
-  constraints: []
+  constraints: [],
+  missionProjectExtras: {},
+  environmentExtras: {},
+  meshExtras: {},
+  missionExtras: {}
 };
 
 function showMapError(message = "Basemap unavailable. Switched to simplified offline view.") {
@@ -358,6 +363,22 @@ function initMap() {
 
 function handleTileFailure() {
   if (useFallbackCanvas) return;
+  if (!tileFallbackTried && map) {
+    tileFallbackTried = true;
+    showTileWarning("Primary tiles failed. Falling back to alternate basemap.");
+    try {
+      fallbackLayer = L.tileLayer("https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap contributors"
+      });
+      fallbackLayer.on("tileerror", () => handleTileFailure());
+      if (tileLayer) tileLayer.remove();
+      fallbackLayer.addTo(map);
+      return;
+    } catch (err) {
+      console.warn("Fallback tile layer failed", err);
+    }
+  }
   showTileWarning("Basemap unavailable. Using simplified offline view.");
   activateFallbackCanvas();
 }
@@ -917,10 +938,21 @@ function focusNode(nodeId) {
   renderNodeDetails();
 }
 
+function computeRiskTag() {
+  const terrainPenalty = 1 / (TERRAIN_MULTIPLIER[meshState.environment.terrain] || 1);
+  const ewPenalty = 1 / (EW_MULTIPLIER[meshState.environment.ewLevel] || 1);
+  const score = terrainPenalty * ewPenalty;
+  if (score < 1.3) return "OK";
+  if (score < 1.7) return "Watch";
+  return "Issue";
+}
+
 function renderMeshSummary() {
   const summaryText = document.getElementById("mesh-health");
   const counts = document.getElementById("mesh-counts");
   const linkMicro = document.getElementById("mesh-link-micro-summary");
+  const bands = new Set([meshState.environment.primaryBand, ...meshState.nodes.map(n => n.band).filter(Boolean)]);
+  const risk = computeRiskTag();
   const totals = meshState.nodes.reduce((acc, node) => {
     acc[node.role] = (acc[node.role] || 0) + 1;
     return acc;
@@ -936,9 +968,16 @@ function renderMeshSummary() {
   const goodShare = (qualityCounts.good + qualityCounts.marginal) / totalLinks;
   const health = goodShare >= 0.7 ? "Robust" : goodShare >= 0.4 ? "Marginal" : "Fragile";
   if (summaryText)
-    summaryText.textContent = meshState.nodes.length ? `Network is ${health} under current assumptions.` : "Network is waiting for nodes.";
+    summaryText.textContent = meshState.nodes.length
+      ? `Network is ${health} under current assumptions. EW/Terrain risk: ${risk}.`
+      : "Network is waiting for nodes.";
   if (counts)
-    counts.textContent = `Nodes ${meshState.nodes.length} (Ctrl ${totals.controller || 0} • Relays ${totals.relay || 0} • UxS ${totals.uxs || 0} • Sensors ${totals.sensor || 0} • Clients ${totals.client || 0}) | Links ${meshState.links.length} (Good ${qualityCounts.good} • Marginal ${qualityCounts.marginal} • Unlikely ${qualityCounts.unlikely})`;
+    counts.textContent = `Nodes ${meshState.nodes.length} (Ctrl ${totals.controller || 0} • Relays ${totals.relay || 0} • UxS ${
+      totals.uxs || 0
+    } • Sensors ${totals.sensor || 0} • Clients ${totals.client || 0}) | Bands ${Array.from(bands).filter(Boolean).join(", ") ||
+      "n/a"} | Links ${meshState.links.length} (Good ${qualityCounts.good} • Marginal ${qualityCounts.marginal} • Unlikely ${
+      qualityCounts.unlikely
+    })`;
   if (linkMicro) {
     linkMicro.innerHTML = "";
     const meshLinks = meshState.meshLinks?.length ? meshState.meshLinks : meshState.links;
@@ -1090,6 +1129,7 @@ function recomputeMesh(save = true) {
 
 function buildMissionProjectPayload() {
   const environment = {
+    ...meshState.environmentExtras,
     terrain: meshState.environment.terrain,
     ew_level: meshState.environment.ewLevel,
     primary_band: meshState.environment.primaryBand,
@@ -1150,11 +1190,20 @@ function buildMissionProjectPayload() {
   })));
 
   return {
+    ...meshState.missionProjectExtras,
     schema: "MissionProject",
-    version: "1.0",
+    version: meshState.version || "1.0",
     origin_tool: "mesh",
-    mission: meshState.mission,
+    mission: { ...meshState.missionExtras, ...meshState.mission },
     environment,
+    mesh: {
+      rf_bands: Array.from(new Set([meshState.environment.primaryBand, ...meshState.nodes.map(n => n.band).filter(Boolean)])),
+      ew_profile: meshState.environment.ewLevel,
+      terrain: meshState.environment.terrain,
+      design_radius_m: meshState.environment.designRadiusMeters,
+      target_reliability_pct: meshState.environment.targetReliability,
+      ...meshState.meshExtras
+    },
     nodes,
     platforms,
     mesh_links: links,
@@ -1309,6 +1358,27 @@ function importMissionProject(json) {
   if (json.schema !== "MissionProject") {
     throw new Error("Expected MissionProject schema JSON.");
   }
+  const version = json.version || json.schemaVersion;
+  if (version && parseFloat(version) < 1.0) {
+    throw new Error(`Unsupported MissionProject schema version ${version}. Expected 1.0 or newer.`);
+  }
+  meshState.version = version || "1.0";
+
+  const knownEnvKeys = new Set(["terrain", "ew_level", "primary_band", "design_radius_m", "target_reliability_pct", "temperature_c", "winds_mps", "altitude_band", "origin_tool"]);
+  const environmentExtras = {};
+  Object.entries(json.environment || {}).forEach(([k, v]) => {
+    if (!knownEnvKeys.has(k)) environmentExtras[k] = v;
+  });
+  meshState.environmentExtras = environmentExtras;
+  meshState.meshExtras = json.mesh || meshState.meshExtras || {};
+  const missionExtras = {};
+  const knownMissionKeys = new Set(["name", "summary", "project_code", "ao", "tasks", "origin_tool"]);
+  Object.entries(json.mission || {}).forEach(([k, v]) => {
+    if (!knownMissionKeys.has(k)) missionExtras[k] = v;
+  });
+  meshState.missionExtras = missionExtras;
+  const knownTopKeys = new Set(["schema", "schemaVersion", "version", "origin_tool", "mission", "environment", "mesh", "nodes", "platforms", "mesh_links", "kits", "constraints", "notes"]);
+  meshState.missionProjectExtras = Object.fromEntries(Object.entries(json).filter(([k]) => !knownTopKeys.has(k)));
   const nodes = (json.nodes || []).map(node => ({
     id: node.id || generateId("node"),
     label: node.label || node.name || node.id || "Node",
@@ -1676,6 +1746,8 @@ function exportMeshToKml() {
   const kml = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
+  <name>${meshState.mission?.name || "Mesh Architect export"}</name>
+  <description>Project ${meshState.mission?.project_code || "n/a"} • Terrain ${meshState.environment.terrain} • EW ${meshState.environment.ewLevel}</description>
 ${roleStyles}
 ${linkStyles}
 ${nodePlacemarks}
@@ -1692,6 +1764,7 @@ function exportMeshToCot() {
     type: "cot-snapshot",
     generated: now.toISOString(),
     project: meshState.mission?.name,
+    project_code: meshState.mission?.project_code,
     environment: {
       terrain: meshState.environment.terrain,
       ew_level: meshState.environment.ewLevel,
@@ -1726,6 +1799,15 @@ function exportMeshToCot() {
 
 function exportMeshToGeoJson() {
   const features = [];
+  const metadata = {
+    mission: meshState.mission?.name,
+    project_code: meshState.mission?.project_code,
+    environment: {
+      terrain: meshState.environment.terrain,
+      ew_level: meshState.environment.ewLevel,
+      primary_band: meshState.environment.primaryBand
+    }
+  };
   meshState.nodes.forEach(node => {
     if (node.lat == null || node.lng == null) return;
     features.push({
@@ -1775,7 +1857,7 @@ function exportMeshToGeoJson() {
     });
   });
 
-  const geo = { type: "FeatureCollection", features };
+  const geo = { type: "FeatureCollection", properties: metadata, features };
   const now = new Date();
   const filename = `mesh-architect-geojson-${now.toISOString().slice(0, 16).replace(/[:T]/g, "-")}.geojson`;
   downloadTextFile(filename, JSON.stringify(geo, null, 2), "application/geo+json");
