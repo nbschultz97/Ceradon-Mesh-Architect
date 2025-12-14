@@ -1,5 +1,27 @@
+const APP_VERSION = "Mesh Architect v0.3.1";
+const MISSIONPROJECT_SCHEMA_VERSION = "2.0.0";
 const STORAGE_KEY = "ceradon-mesh-state-v0.3";
 const DEMO_BANNER_KEY = "meshDemoBannerDismissed";
+
+const CHANGE_LOG = [
+  {
+    version: "v0.3.1",
+    date: "2024-05-20",
+    changes: [
+      "Added visible app + MissionProject schema badges and shared change log.",
+      "Aligned MissionProject exports to schemaVersion 2.0.0 with preserved extras.",
+      "Improved mobile responsiveness and neutralized demo guidance."
+    ]
+  },
+  {
+    version: "v0.3",
+    date: "2024-05-01",
+    changes: [
+      "Initial public Mesh Architect demo with MissionProject exchange and WHITEFROST preset.",
+      "TAK/GeoJSON/CoT exports and quick demo presets."
+    ]
+  }
+];
 
 const VALID_ROLES = ["controller", "relay", "sensor", "client", "uxs"];
 const VALID_BANDS = ["900", "1.2", "2.4", "5.8", "other"];
@@ -44,8 +66,8 @@ const EW_MULTIPLIER = {
 };
 
 const mapDefaults = {
-  center: { lat: 40.7608, lng: -111.8910 },
-  zoom: 15
+  center: { lat: 39.8283, lng: -98.5795 },
+  zoom: 6
 };
 
 let map;
@@ -82,7 +104,8 @@ const meshState = {
   missionProjectExtras: {},
   environmentExtras: {},
   meshExtras: {},
-  missionExtras: {}
+  missionExtras: {},
+  schemaVersion: MISSIONPROJECT_SCHEMA_VERSION
 };
 
 function showMapError(message = "Basemap unavailable. Switched to simplified offline view.") {
@@ -1128,6 +1151,7 @@ function recomputeMesh(save = true) {
 }
 
 function buildMissionProjectPayload() {
+  const baseTopLevel = { ...meshState.missionProjectExtras };
   const environment = {
     ...meshState.environmentExtras,
     terrain: meshState.environment.terrain,
@@ -1190,9 +1214,9 @@ function buildMissionProjectPayload() {
   })));
 
   return {
-    ...meshState.missionProjectExtras,
     schema: "MissionProject",
-    version: meshState.version || "1.0",
+    schemaVersion: MISSIONPROJECT_SCHEMA_VERSION,
+    version: meshState.version || MISSIONPROJECT_SCHEMA_VERSION,
     origin_tool: "mesh",
     mission: { ...meshState.missionExtras, ...meshState.mission },
     environment,
@@ -1209,7 +1233,8 @@ function buildMissionProjectPayload() {
     mesh_links: links,
     kits: meshState.kits || [],
     constraints: meshState.constraints || [],
-    notes: meshState.notes
+    notes: meshState.notes,
+    ...baseTopLevel
   };
 }
 
@@ -1249,11 +1274,64 @@ function setImportStatus(message, tone = "muted") {
   }
 }
 
-function updateIntegrationStatus(loaded, name) {
+function renderVersionBadges() {
+  const headerApp = document.getElementById("app-version-badge");
+  const headerSchema = document.getElementById("schema-version-badge");
+  const footerApp = document.getElementById("footer-app-version");
+  const footerSchema = document.getElementById("footer-schema-version");
+  const schemaLabel = `MissionProject schema ${MISSIONPROJECT_SCHEMA_VERSION}`;
+  [
+    [headerApp, APP_VERSION],
+    [headerSchema, schemaLabel],
+    [footerApp, APP_VERSION],
+    [footerSchema, schemaLabel]
+  ].forEach(([el, text]) => {
+    if (el) el.textContent = text;
+  });
+}
+
+function renderChangeLog() {
+  const container = document.getElementById("change-log-list");
+  if (!container) return;
+  container.innerHTML = "";
+  CHANGE_LOG.forEach(entry => {
+    const wrapper = document.createElement("div");
+    wrapper.className = "change-log-entry";
+    const header = document.createElement("div");
+    header.innerHTML = `<strong>${entry.version}</strong> — <span class="muted">${entry.date}</span>`;
+    wrapper.appendChild(header);
+    if (entry.changes?.length) {
+      const list = document.createElement("ul");
+      entry.changes.forEach(item => {
+        const li = document.createElement("li");
+        li.textContent = item;
+        list.appendChild(li);
+      });
+      wrapper.appendChild(list);
+    }
+    container.appendChild(wrapper);
+  });
+}
+
+function updateIntegrationStatus(loaded, name, schemaVersion = meshState.schemaVersion) {
   const status = document.getElementById("integration-status");
-  if (!status) return;
-  status.textContent = loaded ? `MissionProject loaded: ${name || "Unnamed project"}` : "No MissionProject loaded.";
-  status.classList.toggle("muted", !loaded);
+  const schemaLabel = document.getElementById("integration-schema-version");
+  if (status) {
+    status.textContent = loaded
+      ? `MissionProject loaded: ${name || "Unnamed project"}`
+      : "No MissionProject loaded.";
+    status.classList.toggle("muted", !loaded);
+  }
+  if (schemaLabel) {
+    if (loaded) {
+      schemaLabel.textContent = `Schema version: ${schemaVersion || MISSIONPROJECT_SCHEMA_VERSION}`;
+      schemaLabel.classList.remove("muted");
+    } else {
+      schemaLabel.textContent =
+        "Use the Architect Stack hub or Mission Architect to create a MissionProject JSON, then import it here.";
+      schemaLabel.classList.add("muted");
+    }
+  }
 }
 
 function normalizeRole(role) {
@@ -1362,7 +1440,8 @@ function importMissionProject(json) {
   if (version && parseFloat(version) < 1.0) {
     throw new Error(`Unsupported MissionProject schema version ${version}. Expected 1.0 or newer.`);
   }
-  meshState.version = version || "1.0";
+  meshState.version = version || MISSIONPROJECT_SCHEMA_VERSION;
+  meshState.schemaVersion = json.schemaVersion || version || MISSIONPROJECT_SCHEMA_VERSION;
 
   const knownEnvKeys = new Set(["terrain", "ew_level", "primary_band", "design_radius_m", "target_reliability_pct", "temperature_c", "winds_mps", "altitude_band", "origin_tool"]);
   const environmentExtras = {};
@@ -1485,7 +1564,7 @@ function applyImportResult(result, mode = "replace", sourceType = "unknown") {
   recomputeMesh();
   fitMapToNodes();
   setImportStatus(mode === "append" ? "Imported and appended nodes." : "Imported mesh successfully.");
-  if (sourceType === "mission") updateIntegrationStatus(true, mission?.name || meshState.mission?.name);
+  if (sourceType === "mission") updateIntegrationStatus(true, mission?.name || meshState.mission?.name, meshState.schemaVersion);
 }
 
 function handleParsedImport(parsed) {
@@ -1868,6 +1947,8 @@ function fitDesignToInputs() {
 }
 
 function init() {
+  renderVersionBadges();
+  renderChangeLog();
   initMap();
   wireUI();
   initDemoBanner();
