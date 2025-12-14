@@ -88,8 +88,42 @@ body {
   line-height: 1.4;
 }
 
+.demo-neutral-banner {
+  background: #0b1016;
+  border: 1px dashed #2a3644;
+  padding: 0.5rem 0.65rem;
+  border-radius: 4px;
+  color: #dbeafe;
+  margin-bottom: 0.5rem;
+}
+
 h1, h2, h3 {
   margin: 0 0 0.5rem 0;
+}
+
+.version-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.version-badges,
+.footer-badges {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.badge {
+  background: #132033;
+  border: 1px solid #2a3644;
+  color: #dbeafe;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .subtitle {
@@ -285,19 +319,28 @@ button:active {
   filter: drop-shadow(0 0 4px rgba(0,0,0,0.45));
 }
 
+#link-summary-section {
+  overflow-x: auto;
+}
+
 #link-summary-section table {
   width: 100%;
+  min-width: 720px;
   border-collapse: collapse;
   font-size: 0.9rem;
 }
 
-#link-summary-section th, #link-summary-section td {
+#link-summary-section th,
+#link-summary-section td {
   padding: 0.35rem;
   border-bottom: 1px solid #2a3644;
 }
 
 #link-summary-section thead {
   background: #111722;
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 #recommendations {
@@ -388,7 +431,49 @@ button:active {
   min-height: 1.2rem;
 }
 
-@media (max-width: 1100px) {
+.change-log {
+  margin: 0 1rem 1.5rem;
+  background: #0b1016;
+  border: 1px solid #1f2a36;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+}
+
+.change-log summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.change-log ul {
+  margin: 0.35rem 0 0.75rem 1.2rem;
+  padding: 0;
+}
+
+.change-log li {
+  margin-bottom: 0.25rem;
+}
+
+.change-log-entry {
+  margin-bottom: 0.65rem;
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid #1f2a36;
+}
+
+.app-footer {
+  padding: 0.75rem 1rem 1.25rem;
+  display: flex;
+  justify-content: flex-start;
+  border-top: 1px solid #1f2a36;
+  background: #0b1016;
+}
+
+@media (max-width: 1400px) {
+  .layout {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 980px) {
   .layout {
     grid-template-columns: 1fr;
   }

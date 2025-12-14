@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Ceradon Mesh Architect v0.3</title>
+  <title>Ceradon Mesh Architect v0.3.1</title>
   <link
     rel="stylesheet"
     href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -168,7 +168,13 @@
   <div id="app-root" style="display: none">
     <header class="app-header">
       <div>
-        <h1>Ceradon Mesh Architect v0.3 – RF mesh planner for controllers, relays, sensors, clients, and UxS</h1>
+        <div class="version-row">
+          <h1>Ceradon Mesh Architect – RF mesh planner for controllers, relays, sensors, clients, and UxS</h1>
+          <div class="version-badges">
+            <span class="badge" id="app-version-badge"></span>
+            <span class="badge" id="schema-version-badge"></span>
+          </div>
+        </div>
         <p class="subtitle">
           Mid-weight RF mesh planning between heavyweight propagation suites and ad-hoc field tests. Tune terrain and EW sliders,
           plan in the bands you actually fly, and export overlays for TAK.
@@ -256,6 +262,7 @@
 
         <div class="section">
           <h3>Quick Demo</h3>
+          <div class="demo-neutral-banner">All demo presets are neutral training scenarios — not tied to real units or missions.</div>
           <label for="preset-select">Preset AO</label>
           <select id="preset-select">
             <option value="none">None (blank map)</option>
@@ -334,9 +341,10 @@
         <div class="section" id="integration-panel">
           <h3>Integration</h3>
           <p id="integration-status" class="muted">No MissionProject loaded.</p>
+          <p id="integration-schema-version" class="muted"></p>
           <div class="button-grid">
             <button id="reimport-mission-btn" title="Re-import the last MissionProject JSON">Re-import last MissionProject</button>
-            <label class="file-like" for="integration-mission-file">Load MissionProject JSON…</label>
+            <label class="file-like" for="integration-mission-file">Import MissionProject JSON</label>
             <input type="file" id="integration-mission-file" accept="application/json" />
           </div>
         </div>
@@ -355,16 +363,16 @@
           <div class="button-grid">
             <button id="import-btn">Import from text</button>
             <button id="import-mission-btn">Import MissionProject JSON</button>
-            <button id="download-btn">Download MissionProject JSON</button>
+            <button id="download-btn">Export MissionProject JSON</button>
             <button id="panel-export-mission-btn">Export MissionProject JSON</button>
           </div>
 
           <div class="import-files">
-            <label for="mission-file-input">Load MissionProject JSON file…</label>
+            <label for="mission-file-input">Import MissionProject JSON</label>
             <input type="file" id="mission-file-input" accept="application/json" />
-            <label for="node-file-input">Load Node Architect JSON file…</label>
+            <label for="node-file-input">Load Node Architect JSON</label>
             <input type="file" id="node-file-input" accept="application/json" />
-            <label for="uxs-file-input">Load UxS Architect JSON file…</label>
+            <label for="uxs-file-input">Load UxS Architect JSON</label>
             <input type="file" id="uxs-file-input" accept="application/json" />
             <label for="mesh-file-input">Load Mesh Architect JSON file…</label>
             <input type="file" id="mesh-file-input" accept="application/json" />
@@ -376,11 +384,25 @@
           <div class="button-grid">
             <button id="export-kml-btn">Download ATAK KML</button>
             <button id="export-geojson-btn">Download GeoJSON</button>
-            <button id="export-cot-btn">Download CoT-style JSON snapshot</button>
+            <button id="export-cot-btn">Download CoT-style JSON</button>
           </div>
         </div>
       </section>
     </main>
+
+    <section class="change-log">
+      <details open>
+        <summary>Change Log</summary>
+        <div id="change-log-list"></div>
+      </details>
+    </section>
+
+    <footer class="app-footer">
+      <div class="footer-badges">
+        <span class="badge" id="footer-app-version"></span>
+        <span class="badge" id="footer-schema-version"></span>
+      </div>
+    </footer>
   </div>
 
   <script
