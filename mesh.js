@@ -684,18 +684,26 @@ function meshQualityLabel(quality) {
 
 function syncMeshLinksFromState() {
   const envTag = `${meshState.environment.terrain || "unknown"}-${meshState.environment.ewLevel || "EW"}`;
-  meshState.meshLinks = meshState.links.map(link => ({
-    id: link.id || `${link.fromId}-${link.toId}`,
-    from_id: link.fromId,
-    to_id: link.toId,
-    band: meshState.environment.primaryBand,
-    estimated_range: Math.round(link.distanceOverrideMeters || link.distanceMeters || 0),
-    estimated_link_quality: meshQualityLabel(link.quality),
-    estimated_link_quality_label: meshQualityLabel(link.quality),
-    environment_tag: envTag,
-    link_margin_db: Math.round(link.linkMarginDb || 0),
-    distance_m: Math.round(link.distanceOverrideMeters || link.distanceMeters || 0)
-  }));
+  const extrasIndex = new Map(
+    (meshState.meshLinks || []).map(l => [l.id || `${l.from_id || ""}-${l.to_id || ""}`, l.extras || {}])
+  );
+  meshState.meshLinks = meshState.links.map(link => {
+    const id = link.id || `${link.fromId}-${link.toId}`;
+    const extras = extrasIndex.get(id) || {};
+    return {
+      ...extras,
+      id,
+      from_id: link.fromId,
+      to_id: link.toId,
+      band: meshState.environment.primaryBand,
+      estimated_range: Math.round(link.distanceOverrideMeters || link.distanceMeters || 0),
+      estimated_link_quality: meshQualityLabel(link.quality),
+      estimated_link_quality_label: meshQualityLabel(link.quality),
+      environment_tag: envTag,
+      link_margin_db: Math.round(link.linkMarginDb || 0),
+      distance_m: Math.round(link.distanceOverrideMeters || link.distanceMeters || 0)
+    };
+  });
 }
 
 function renderLinks() {
@@ -1019,6 +1027,41 @@ function renderMeshSummary() {
       linkMicro.appendChild(li);
     }
   }
+
+  renderOriginSummary();
+}
+
+function renderOriginSummary() {
+  const container = document.getElementById("origin-summary");
+  if (!container) return;
+  if (!meshState.nodes.length) {
+    container.textContent = "Origin summary will appear after import or placement.";
+    return;
+  }
+
+  const friendlyOrigins = {
+    mesh: "Mesh Architect",
+    node: "Node Architect",
+    nodearchitect: "Node Architect",
+    uxs: "UxS Architect",
+    uxsarchitect: "UxS Architect",
+    mission: "Mission Architect",
+    demo: "Demo preset",
+    whitefrost: "WHITEFROST preset"
+  };
+
+  const counts = meshState.nodes.reduce((acc, node) => {
+    const originKey = String(node.origin_tool || node.source || "unknown").toLowerCase();
+    acc[originKey] = (acc[originKey] || 0) + 1;
+    return acc;
+  }, {});
+
+  const summaryParts = Object.entries(counts).map(([origin, total]) => {
+    const label = friendlyOrigins[origin] || origin.charAt(0).toUpperCase() + origin.slice(1);
+    return `${label}: ${total}`;
+  });
+
+  container.textContent = `Nodes by origin_tool — ${summaryParts.join(", ")}`;
 }
 
 function analyzeMeshRobustness() {
@@ -1151,6 +1194,8 @@ function recomputeMesh(save = true) {
 }
 
 function buildMissionProjectPayload() {
+  const schemaVersion = meshState.schemaVersion || MISSIONPROJECT_SCHEMA_VERSION;
+  const version = meshState.version || schemaVersion;
   const baseTopLevel = { ...meshState.missionProjectExtras };
   const environment = {
     ...meshState.environmentExtras,
@@ -1166,6 +1211,7 @@ function buildMissionProjectPayload() {
   };
 
   const nodes = meshState.nodes.map(node => ({
+    ...(node.extras || {}),
     id: node.id || generateId("node"),
     label: node.label,
     role: node.role,
@@ -1185,6 +1231,7 @@ function buildMissionProjectPayload() {
   const platforms = meshState.nodes
     .filter(n => n.role === "uxs")
     .map(p => ({
+      ...(p.platformExtras || {}),
       id: `${p.id}-platform`,
       label: p.label,
       type: "uxs",
@@ -1199,6 +1246,7 @@ function buildMissionProjectPayload() {
     }));
 
   const links = (meshState.meshLinks?.length ? meshState.meshLinks : meshState.links.map(link => ({
+    ...(link.extras || {}),
     id: link.id || `${link.fromId}-${link.toId}`,
     from_id: link.fromId,
     to_id: link.toId,
@@ -1214,9 +1262,10 @@ function buildMissionProjectPayload() {
   })));
 
   return {
+    ...baseTopLevel,
     schema: "MissionProject",
-    schemaVersion: MISSIONPROJECT_SCHEMA_VERSION,
-    version: meshState.version || MISSIONPROJECT_SCHEMA_VERSION,
+    schemaVersion,
+    version,
     origin_tool: "mesh",
     mission: { ...meshState.missionExtras, ...meshState.mission },
     environment,
@@ -1233,8 +1282,7 @@ function buildMissionProjectPayload() {
     mesh_links: links,
     kits: meshState.kits || [],
     constraints: meshState.constraints || [],
-    notes: meshState.notes,
-    ...baseTopLevel
+    notes: meshState.notes
   };
 }
 
@@ -1279,7 +1327,7 @@ function renderVersionBadges() {
   const headerSchema = document.getElementById("schema-version-badge");
   const footerApp = document.getElementById("footer-app-version");
   const footerSchema = document.getElementById("footer-schema-version");
-  const schemaLabel = `MissionProject schema ${MISSIONPROJECT_SCHEMA_VERSION}`;
+  const schemaLabel = `MissionProject schema ${meshState.schemaVersion || MISSIONPROJECT_SCHEMA_VERSION}`;
   [
     [headerApp, APP_VERSION],
     [headerSchema, schemaLabel],
@@ -1440,8 +1488,10 @@ function importMissionProject(json) {
   if (version && parseFloat(version) < 1.0) {
     throw new Error(`Unsupported MissionProject schema version ${version}. Expected 1.0 or newer.`);
   }
-  meshState.version = version || MISSIONPROJECT_SCHEMA_VERSION;
-  meshState.schemaVersion = json.schemaVersion || version || MISSIONPROJECT_SCHEMA_VERSION;
+  const schemaVersion = json.schemaVersion || version || MISSIONPROJECT_SCHEMA_VERSION;
+  json.schemaVersion = schemaVersion;
+  meshState.version = version || schemaVersion;
+  meshState.schemaVersion = schemaVersion;
 
   const knownEnvKeys = new Set(["terrain", "ew_level", "primary_band", "design_radius_m", "target_reliability_pct", "temperature_c", "winds_mps", "altitude_band", "origin_tool"]);
   const environmentExtras = {};
@@ -1449,7 +1499,7 @@ function importMissionProject(json) {
     if (!knownEnvKeys.has(k)) environmentExtras[k] = v;
   });
   meshState.environmentExtras = environmentExtras;
-  meshState.meshExtras = json.mesh || meshState.meshExtras || {};
+  meshState.meshExtras = json.mesh ? { ...json.mesh } : meshState.meshExtras || {};
   const missionExtras = {};
   const knownMissionKeys = new Set(["name", "summary", "project_code", "ao", "tasks", "origin_tool"]);
   Object.entries(json.mission || {}).forEach(([k, v]) => {
@@ -1458,62 +1508,147 @@ function importMissionProject(json) {
   meshState.missionExtras = missionExtras;
   const knownTopKeys = new Set(["schema", "schemaVersion", "version", "origin_tool", "mission", "environment", "mesh", "nodes", "platforms", "mesh_links", "kits", "constraints", "notes"]);
   meshState.missionProjectExtras = Object.fromEntries(Object.entries(json).filter(([k]) => !knownTopKeys.has(k)));
-  const nodes = (json.nodes || []).map(node => ({
-    id: node.id || generateId("node"),
-    label: node.label || node.name || node.id || "Node",
-    role: normalizeRole(node.role || "sensor"),
-    band: normalizeBand(node.band),
-    maxRangeMeters: node.max_range_m || node.maxRangeMeters || defaultRangeForRole(node.role || "sensor"),
-    lat: node.lat ?? node.latitude ?? null,
-    lng: node.lon ?? node.lng ?? node.longitude ?? null,
-    elevationMeters: node.elevation_m ?? node.elevationMeters,
-    heightAboveGroundMeters: node.height_agl_m ?? node.heightAboveGroundMeters,
-    batteryHours: node.battery_hours ?? node.batteryHours,
-    power_w: node.power_w ?? node.powerW,
-    origin_tool: node.origin_tool || node.source || json.origin_tool || "mesh",
-    relayCandidate: node.relay_candidate ?? node.relayCandidate,
-    carriedNodeIds: node.carried_node_ids || node.carriedNodeIds || []
-  }));
+  const knownNodeKeys = new Set([
+    "id",
+    "label",
+    "name",
+    "role",
+    "band",
+    "lat",
+    "lon",
+    "lng",
+    "latitude",
+    "longitude",
+    "elevation_m",
+    "elevationMeters",
+    "height_agl_m",
+    "heightAboveGroundMeters",
+    "max_range_m",
+    "maxRangeMeters",
+    "battery_hours",
+    "batteryHours",
+    "power_w",
+    "powerW",
+    "origin_tool",
+    "relay_candidate",
+    "relayCandidate",
+    "carried_node_ids",
+    "carriedNodeIds",
+    "source"
+  ]);
+  const nodes = (json.nodes || []).map(node => {
+    const extras = Object.fromEntries(Object.entries(node).filter(([k]) => !knownNodeKeys.has(k)));
+    return {
+      id: node.id || generateId("node"),
+      label: node.label || node.name || node.id || "Node",
+      role: normalizeRole(node.role || "sensor"),
+      band: normalizeBand(node.band),
+      maxRangeMeters: node.max_range_m || node.maxRangeMeters || defaultRangeForRole(node.role || "sensor"),
+      lat: node.lat ?? node.latitude ?? null,
+      lng: node.lon ?? node.lng ?? node.longitude ?? null,
+      elevationMeters: node.elevation_m ?? node.elevationMeters,
+      heightAboveGroundMeters: node.height_agl_m ?? node.heightAboveGroundMeters,
+      batteryHours: node.battery_hours ?? node.batteryHours,
+      power_w: node.power_w ?? node.powerW,
+      origin_tool: node.origin_tool || node.source || json.origin_tool || "mesh",
+      relayCandidate: node.relay_candidate ?? node.relayCandidate,
+      carriedNodeIds: node.carried_node_ids || node.carriedNodeIds || [],
+      extras
+    };
+  });
 
-  const platformNodes = (json.platforms || []).map((p, idx) => ({
-    id: p.id || generateId("uxs"),
-    label: p.label || p.name || `Platform ${idx + 1}`,
-    role: "uxs",
-    band: normalizeBand(p.band || json.environment?.primary_band),
-    maxRangeMeters: ROLE_DEFAULTS.uxs.baseRange,
-    lat: p.lat ?? p.latitude ?? null,
-    lng: p.lon ?? p.lng ?? p.longitude ?? null,
-    elevationMeters: p.elevation_m ?? p.elevationMeters,
-    heightAboveGroundMeters: p.max_altitude_m ?? p.heightAboveGroundMeters ?? p.height_agl_m,
-    origin_tool: p.origin_tool || "uxs",
-    carriedNodeIds: p.carried_node_ids || [],
-    isAirborne: true
-  }));
+  const knownPlatformKeys = new Set([
+    "id",
+    "label",
+    "name",
+    "type",
+    "band",
+    "lat",
+    "lon",
+    "lng",
+    "latitude",
+    "longitude",
+    "elevation_m",
+    "elevationMeters",
+    "max_altitude_m",
+    "heightAboveGroundMeters",
+    "height_agl_m",
+    "origin_tool",
+    "carried_node_ids",
+    "carriedNodeIds",
+    "isAirborne",
+    "endurance_minutes",
+    "battery_hours"
+  ]);
 
-  const links = (json.mesh_links || []).map(l => ({
-    id: l.id || `${l.from_id || ""}-${l.to_id || ""}`,
-    fromId: l.from_id,
-    toId: l.to_id,
-    distanceMeters: l.distance_m,
-    distanceOverrideMeters: l.distance_m,
-    los: l.los || "LOS",
-    quality: l.estimated_link_quality || l.quality || "none",
-    linkMarginDb: l.link_margin_db,
-    assumedBand: l.assumed_band || l.band || json.environment?.primary_band,
-    origin_tool: l.origin_tool || json.origin_tool || "mesh"
-  }));
+  const platformNodes = (json.platforms || []).map((p, idx) => {
+    const extras = Object.fromEntries(Object.entries(p).filter(([k]) => !knownPlatformKeys.has(k)));
+    return {
+      id: p.id || generateId("uxs"),
+      label: p.label || p.name || `Platform ${idx + 1}`,
+      role: "uxs",
+      band: normalizeBand(p.band || json.environment?.primary_band),
+      maxRangeMeters: ROLE_DEFAULTS.uxs.baseRange,
+      lat: p.lat ?? p.latitude ?? null,
+      lng: p.lon ?? p.lng ?? p.longitude ?? null,
+      elevationMeters: p.elevation_m ?? p.elevationMeters,
+      heightAboveGroundMeters: p.max_altitude_m ?? p.heightAboveGroundMeters ?? p.height_agl_m,
+      origin_tool: p.origin_tool || "uxs",
+      carriedNodeIds: p.carried_node_ids || [],
+      isAirborne: true,
+      platformExtras: extras
+    };
+  });
 
-  const meshLinks = (json.mesh_links || []).map(l => ({
-    id: l.id || `${l.from_id || ""}-${l.to_id || ""}`,
-    from_id: l.from_id,
-    to_id: l.to_id,
-    band: l.band || json.environment?.primary_band,
-    estimated_range: l.estimated_range || l.distance_m,
-    estimated_link_quality: l.estimated_link_quality || l.quality || "unknown",
-    estimated_link_quality_label: l.estimated_link_quality_label || l.quality || "unknown",
-    environment_tag: l.environment_tag,
-    link_margin_db: l.link_margin_db
-  }));
+  const knownLinkKeys = new Set([
+    "id",
+    "from_id",
+    "to_id",
+    "distance_m",
+    "los",
+    "estimated_link_quality",
+    "estimated_link_quality_label",
+    "link_margin_db",
+    "estimated_range",
+    "assumed_band",
+    "band",
+    "environment_tag",
+    "origin_tool",
+    "quality"
+  ]);
+
+  const links = (json.mesh_links || []).map(l => {
+    const extras = Object.fromEntries(Object.entries(l).filter(([k]) => !knownLinkKeys.has(k)));
+    return {
+      id: l.id || `${l.from_id || ""}-${l.to_id || ""}`,
+      fromId: l.from_id,
+      toId: l.to_id,
+      distanceMeters: l.distance_m,
+      distanceOverrideMeters: l.distance_m,
+      los: l.los || "LOS",
+      quality: l.estimated_link_quality || l.quality || "none",
+      linkMarginDb: l.link_margin_db,
+      assumedBand: l.assumed_band || l.band || json.environment?.primary_band,
+      origin_tool: l.origin_tool || json.origin_tool || "mesh",
+      extras
+    };
+  });
+
+  const meshLinks = (json.mesh_links || []).map(l => {
+    const extras = Object.fromEntries(Object.entries(l).filter(([k]) => !knownLinkKeys.has(k)));
+    return {
+      id: l.id || `${l.from_id || ""}-${l.to_id || ""}`,
+      from_id: l.from_id,
+      to_id: l.to_id,
+      band: l.band || json.environment?.primary_band,
+      estimated_range: l.estimated_range || l.distance_m,
+      estimated_link_quality: l.estimated_link_quality || l.quality || "unknown",
+      estimated_link_quality_label: l.estimated_link_quality_label || l.quality || "unknown",
+      environment_tag: l.environment_tag,
+      link_margin_db: l.link_margin_db,
+      extras
+    };
+  });
 
   const environment = {
     terrain: json.environment?.terrain || json.environment?.terrainType || meshState.environment.terrain,
@@ -1564,6 +1699,8 @@ function applyImportResult(result, mode = "replace", sourceType = "unknown") {
   recomputeMesh();
   fitMapToNodes();
   setImportStatus(mode === "append" ? "Imported and appended nodes." : "Imported mesh successfully.");
+  renderScenarioBrief(mission?.name || "");
+  renderVersionBadges();
   if (sourceType === "mission") updateIntegrationStatus(true, mission?.name || meshState.mission?.name, meshState.schemaVersion);
 }
 
@@ -1698,6 +1835,8 @@ function loadDemo() {
     meshState.mission = { ...meshState.mission, name: "Demo mesh scenario", project_code: "DEMO-GENERIC", origin_tool: "demo" };
     meshState.constraints = [];
     meshState.kits = [];
+    meshState.schemaVersion = MISSIONPROJECT_SCHEMA_VERSION;
+    meshState.version = meshState.schemaVersion;
   } else {
     meshState.environment = { ...meshState.environment, ...scenario.environment };
     meshState.constraints = scenario.constraints || [];
@@ -1708,6 +1847,8 @@ function loadDemo() {
       origin_tool: "demo"
     };
     meshState.nodes = scenario.nodes.map(n => ({ ...n, source: "demo", origin_tool: "mesh" }));
+    meshState.schemaVersion = scenario.schemaVersion || MISSIONPROJECT_SCHEMA_VERSION;
+    meshState.version = meshState.schemaVersion;
   }
   syncEnvironmentInputs();
   if (map && scenario?.environment?.center) {
@@ -1717,6 +1858,8 @@ function loadDemo() {
   selectedNodeId = null;
   recomputeMesh();
   fitMapToNodes();
+  renderScenarioBrief(selected || "");
+  renderVersionBadges();
 }
 
 function fitMapToNodes() {
@@ -1944,6 +2087,23 @@ function exportMeshToGeoJson() {
 
 function fitDesignToInputs() {
   renderMeshSummary();
+}
+
+function renderScenarioBrief(presetId) {
+  const card = document.getElementById("scenario-brief-card");
+  const textEl = document.getElementById("scenario-brief-text");
+  if (!card || !textEl) return;
+  const label = (presetId || meshState.mission?.name || "").toString().toLowerCase();
+  const isWhitefrost = label.includes("whitefrost");
+  if (!isWhitefrost) {
+    card.hidden = true;
+    textEl.textContent = "";
+    return;
+  }
+
+  card.hidden = false;
+  textEl.textContent =
+    "Ridgeline-focused mesh with cold-weather sustainment and contested EW; favor warmed controllers, ridgeline relays, and LOS-preserving routes.";
 }
 
 function init() {

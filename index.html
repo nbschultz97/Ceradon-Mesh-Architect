@@ -179,6 +179,9 @@
           Mid-weight RF mesh planning between heavyweight propagation suites and ad-hoc field tests. Tune terrain and EW sliders,
           plan in the bands you actually fly, and export overlays for TAK.
         </p>
+        <p class="onboarding-text">
+          Place controllers and relays first, then drag the RF/EW sliders to see how Good / Marginal / Unlikely links shift under contested RF assumptions.
+        </p>
       </div>
       <div class="import-export">
         <button id="export-btn">Export MissionProject JSON</button>
@@ -290,6 +293,11 @@
       <section class="panel right">
         <h2>Outputs &amp; Hints</h2>
 
+        <div class="summary-card" id="scenario-brief-card" hidden>
+          <div class="summary-title">Scenario doctrinal snapshot</div>
+          <p id="scenario-brief-text" class="muted"></p>
+        </div>
+
         <div class="summary-card" id="mesh-summary">
           <div>
             <div class="summary-title">Mesh Snapshot</div>
@@ -342,6 +350,7 @@
           <h3>Integration</h3>
           <p id="integration-status" class="muted">No MissionProject loaded.</p>
           <p id="integration-schema-version" class="muted"></p>
+          <p id="origin-summary" class="muted"></p>
           <div class="button-grid">
             <button id="reimport-mission-btn" title="Re-import the last MissionProject JSON">Re-import last MissionProject</button>
             <label class="file-like" for="integration-mission-file">Import MissionProject JSON</label>
