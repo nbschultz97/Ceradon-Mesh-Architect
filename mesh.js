@@ -1,4 +1,4 @@
-const APP_VERSION = "Mesh Architect v0.3.1";
+const APP_VERSION = "Mesh Architect Web v1.3";
 const MISSIONPROJECT_SCHEMA_VERSION = "2.0.0";
 const STORAGE_KEY = "ceradon-mesh-state-v0.3";
 const DEMO_BANNER_KEY = "meshDemoBannerDismissed";
@@ -94,7 +94,7 @@ const meshState = {
   mission: {
     name: "Mesh Architect Plan",
     project_code: "MESH-GHOST-347",
-    origin_tool: "mesh"
+    origin_tool: "MeshArchitect"
   },
   nodes: [],
   links: [],
@@ -1207,7 +1207,7 @@ function buildMissionProjectPayload() {
     temperature_c: meshState.environment.temperatureC,
     winds_mps: meshState.environment.windsMps,
     altitude_band: meshState.environment.altitudeBand,
-    origin_tool: "mesh"
+    origin_tool: "MeshArchitect"
   };
 
   const nodes = meshState.nodes.map(node => ({
@@ -1223,7 +1223,7 @@ function buildMissionProjectPayload() {
     max_range_m: node.maxRangeMeters,
     power_w: node.power_w ?? node.powerW,
     battery_hours: node.batteryHours,
-    origin_tool: node.origin_tool || node.source || "mesh",
+    origin_tool: node.origin_tool || node.source || "MeshArchitect",
     relay_candidate: node.relayCandidate,
     carried_node_ids: node.carriedNodeIds || []
   }));
@@ -1241,7 +1241,7 @@ function buildMissionProjectPayload() {
       lat: p.lat,
       lon: p.lng,
       elevation_m: p.elevationMeters,
-      origin_tool: p.origin_tool || "mesh",
+      origin_tool: p.origin_tool || "MeshArchitect",
       carried_node_ids: p.carriedNodeIds || []
     }));
 
@@ -1258,7 +1258,7 @@ function buildMissionProjectPayload() {
     estimated_range: Math.round(link.distanceOverrideMeters || link.distanceMeters || 0),
     band: meshState.environment.primaryBand,
     environment_tag: `${meshState.environment.terrain || "unknown"}-${meshState.environment.ewLevel || "EW"}`,
-    origin_tool: link.origin_tool || "mesh"
+    origin_tool: link.origin_tool || "MeshArchitect"
   })));
 
   return {
@@ -1266,7 +1266,7 @@ function buildMissionProjectPayload() {
     schema: "MissionProject",
     schemaVersion,
     version,
-    origin_tool: "mesh",
+    origin_tool: "MeshArchitect",
     mission: { ...meshState.missionExtras, ...meshState.mission },
     environment,
     mesh: {
@@ -1322,6 +1322,17 @@ function setImportStatus(message, tone = "muted") {
   }
 }
 
+function setSchemaWarning(version) {
+  const warn = document.getElementById("schema-warning");
+  if (!warn) return;
+  if (version && version !== MISSIONPROJECT_SCHEMA_VERSION) {
+    warn.textContent = `Imported schemaVersion ${version} differs from expected ${MISSIONPROJECT_SCHEMA_VERSION}.`;
+    warn.hidden = false;
+  } else {
+    warn.hidden = true;
+  }
+}
+
 function renderVersionBadges() {
   const headerApp = document.getElementById("app-version-badge");
   const headerSchema = document.getElementById("schema-version-badge");
@@ -1336,6 +1347,7 @@ function renderVersionBadges() {
   ].forEach(([el, text]) => {
     if (el) el.textContent = text;
   });
+  setSchemaWarning(meshState.schemaVersion || MISSIONPROJECT_SCHEMA_VERSION);
 }
 
 function renderChangeLog() {
@@ -1473,7 +1485,7 @@ function importMeshArchitect(json) {
     elevationMeters: node.elevationMeters ?? node.altitudeMeters,
     heightAboveGroundMeters: node.heightAboveGroundMeters ?? node.mastHeightMeters,
     source: node.source || "meshImport",
-    origin_tool: node.origin_tool || node.source || "mesh",
+    origin_tool: node.origin_tool || node.source || "MeshArchitect",
     relayCandidate: node.relayCandidate,
     isAirborne: node.isAirborne
   }));
@@ -1492,6 +1504,7 @@ function importMissionProject(json) {
   json.schemaVersion = schemaVersion;
   meshState.version = version || schemaVersion;
   meshState.schemaVersion = schemaVersion;
+  setSchemaWarning(schemaVersion);
 
   const knownEnvKeys = new Set(["terrain", "ew_level", "primary_band", "design_radius_m", "target_reliability_pct", "temperature_c", "winds_mps", "altitude_band", "origin_tool"]);
   const environmentExtras = {};
