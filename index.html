@@ -157,12 +157,14 @@
 <body>
   <div id="access-gate">
     <h1>Ceradon Mesh Architect — part of the Ceradon Architect COTS planning suite</h1>
-    <p>Enter your demo access code to continue.</p>
+    <p>Enter the access code provided by Ceradon Systems.</p>
     <label for="demo-code">Access code</label>
     <input id="demo-code" type="password" autocomplete="off" />
     <button id="demo-enter">Enter</button>
-    <div id="demo-error" class="error-message">Invalid code.</div>
-    <p class="muted" style="margin-top: 0.5rem">Need a demo code? Email <a href="mailto:contact@ceradonsystems.com?subject=Demo%20code%20request%20%E2%80%93%20Ceradon%20Mesh%20Architect">contact@ceradonsystems.com</a> from your org account.</p>
+    <div id="demo-error" class="error-message" style="display: none">Invalid code.</div>
+    <p class="muted" style="margin-top: 0.5rem">
+      Need a demo code? <a href="mailto:contact@ceradonsystems.com?subject=Demo%20code%20request%20%E2%80%93%20Ceradon%20Mesh%20Architect">Request a demo code</a> from your org account.
+    </p>
   </div>
 
   <div id="app-root" style="display: none">
@@ -359,16 +361,13 @@
         </div>
 
         <div class="section">
-          <h3>Import / Export</h3>
-          <p class="muted">
-            Mesh Architect ingests MissionProject JSON plus Node Architect nodes, UxS Architect platforms, or legacy Mesh Architect JSON.
-            Import replaces the current plan by default; switch to append if you are merging catalogs.
-          </p>
+          <h3>MissionProject Import / Export</h3>
+          <p class="muted">MissionProject JSON is the primary path for moving plans between Mesh Architect and the Architect hub.</p>
           <div class="import-mode">
             <label><input type="radio" name="import-mode" value="replace" checked /> Replace current mesh</label>
             <label><input type="radio" name="import-mode" value="append" /> Append to current mesh</label>
           </div>
-          <textarea id="json-area" placeholder="Paste MissionProject / Node / UxS / Mesh JSON here"></textarea>
+          <textarea id="json-area" placeholder="Paste MissionProject JSON here"></textarea>
           <div class="button-grid">
             <button id="import-btn">Import from text</button>
             <button id="import-mission-btn">Import MissionProject JSON</button>
@@ -379,13 +378,22 @@
           <div class="import-files">
             <label for="mission-file-input">Import MissionProject JSON</label>
             <input type="file" id="mission-file-input" accept="application/json" />
-            <label for="node-file-input">Load Node Architect JSON</label>
-            <input type="file" id="node-file-input" accept="application/json" />
-            <label for="uxs-file-input">Load UxS Architect JSON</label>
-            <input type="file" id="uxs-file-input" accept="application/json" />
-            <label for="mesh-file-input">Load Mesh Architect JSON file…</label>
-            <input type="file" id="mesh-file-input" accept="application/json" />
           </div>
+
+          <details>
+            <summary>Advanced (legacy) formats</summary>
+            <p class="muted">Node Architect, UxS Architect, and legacy Mesh JSON remain available for backward compatibility.</p>
+            <div class="import-files">
+              <label for="node-file-input">Load Node Architect JSON</label>
+              <input type="file" id="node-file-input" accept="application/json" />
+              <label for="uxs-file-input">Load UxS Architect JSON</label>
+              <input type="file" id="uxs-file-input" accept="application/json" />
+              <label for="mesh-file-input">Load Mesh Architect JSON file…</label>
+              <input type="file" id="mesh-file-input" accept="application/json" />
+            </div>
+          </details>
+
+          <div id="schema-warning" class="error-banner" hidden></div>
           <div id="import-error-banner" class="error-banner" hidden></div>
           <div id="import-status" class="muted status-message"></div>
 
@@ -423,8 +431,8 @@
   <script src="mesh.js"></script>
   <script>
     (function () {
-      const ACCESS_CODE = "MESH-GHOST-347";
-      const STORAGE_KEY = "ceradonDemoAuthorized";
+      const DEMO_ACCESS_CODE = "MESH-GHOST-347";
+      const STORAGE_KEY = "mesh_architect_access_granted";
 
       function showApp() {
         const gate = document.getElementById("access-gate");
@@ -443,7 +451,7 @@
       function handleSubmit() {
         const input = document.getElementById("demo-code");
         const value = (input?.value || "").trim();
-        if (value === ACCESS_CODE) {
+        if (value === DEMO_ACCESS_CODE) {
           localStorage.setItem(STORAGE_KEY, "true");
           showApp();
         } else {
@@ -456,6 +464,7 @@
         const gate = document.getElementById("access-gate");
         const input = document.getElementById("demo-code");
         const button = document.getElementById("demo-enter");
+        const errorEl = document.getElementById("demo-error");
 
         if (localStorage.getItem(STORAGE_KEY) === "true") {
           showApp();
@@ -464,10 +473,11 @@
 
         if (gate) gate.style.display = "block";
         if (appRoot) appRoot.style.display = "none";
+        if (errorEl) errorEl.style.display = "none";
 
         if (button) button.addEventListener("click", handleSubmit);
         if (input) {
-          input.addEventListener("keydown", (evt) => {
+          input.addEventListener("keydown", evt => {
             if (evt.key === "Enter") {
               evt.preventDefault();
               handleSubmit();

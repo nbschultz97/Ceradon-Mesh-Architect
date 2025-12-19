@@ -1,0 +1,16 @@
+{
+  "terrain": [
+    { "id": "indoor", "label": "Indoor" },
+    { "id": "dense_urban", "label": "Dense urban" },
+    { "id": "urban", "label": "Urban" },
+    { "id": "suburban", "label": "Suburban" },
+    { "id": "rural", "label": "Rural" },
+    { "id": "open", "label": "Open" }
+  ],
+  "ewLevels": [
+    { "id": "low", "label": "Low" },
+    { "id": "medium", "label": "Medium" },
+    { "id": "high", "label": "High" },
+    { "id": "severe", "label": "Severe" }
+  ]
+}
